@@ -10,15 +10,26 @@ product.
 
 ## Status
 
-Pre-alpha. The scoring math and the config parser are
-implemented and tested. The GitHub fetch layer is not yet
-wired; every `scout` subcommand currently exits with `fetch
-layer not implemented yet` (exit code 2). The CLI shape is
-locked so the upcoming fetch-layer commits slot in without
-renaming flags.
+Pre-alpha. The internals ship in this order:
 
-What's shipping first is the layer that can't be tested with
-HTTP mocks: the scoring function.
+1. Scoring math and config parser. Implemented + tested.
+2. Fetch layer: types, decoders, async HTTP clients for
+   `/repos/:o/:r` and `/repos/:o/:r/issues`, Link-header
+   pagination. Implemented + tested (wiremock integration +
+   live smoke against `api.github.com`).
+3. Signal inference (body pattern-match, label classifiers,
+   ISO-8601 day deltas) and the `factors_from` aggregator
+   binding fetch output to a scoring `Factors`. Implemented
+   + tested.
+4. CLI wiring. Not yet: every `scout` subcommand still exits
+   with `fetch layer not implemented yet` (exit code 2)
+   because the command surface hasn't been plumbed to the
+   fetch layer. This is the next milestone.
+
+Three `Factors` fields also remain at `false` defaults
+(`no_crosslinked_pr`, `contributing_ok`, `maintainer_touched`)
+until their fetch endpoints land; scores computed against the
+current defaults systematically under-rate eligible issues.
 
 ## What it does
 
