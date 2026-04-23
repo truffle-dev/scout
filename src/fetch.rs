@@ -242,6 +242,40 @@ pub fn parse_next_link(header: &str) -> Option<String> {
     }
 }
 
+/// Fetch a raw file body from a GitHub `/contents/{path}` URL.
+/// Returns `Ok(Some(body))` on 200, `Ok(None)` on 404, and propagates
+/// other non-2xx statuses or transport failures. The `Accept:
+/// application/vnd.github.raw` media type asks GitHub to return the
+/// file bytes directly instead of the default JSON envelope with
+/// base64-encoded content, which keeps the decode side trivial.
+async fn get_raw_or_none(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<Option<String>, FetchError> {
+    let mut req = client
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/vnd.github.raw")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+
+    let resp = req.send().await?;
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(FetchError::Status {
+            status: status.as_u16(),
+            url: url.to_string(),
+        });
+    }
+    Ok(Some(resp.text().await?))
+}
+
 /// Fetch repo metadata from `api.github.com`.
 pub async fn repo_meta(
     client: &reqwest::Client,
@@ -314,6 +348,51 @@ pub async fn list_issues_paginated(
         DEFAULT_PAGE_CAP,
     )
     .await
+}
+
+/// Candidate paths for CONTRIBUTING content, probed in order. Covers
+/// the repo-root convention, the `.github/` modern convention, and
+/// the `docs/`-subdir pattern. A repo with CONTRIBUTING under any
+/// other path is treated as "no CONTRIBUTING" here; the classifier
+/// downstream defaults that to contribution-friendly, which matches
+/// the typical shape of such repos (small, no explicit gates).
+pub const CONTRIBUTING_PATHS: &[&str] = &[
+    "CONTRIBUTING.md",
+    ".github/CONTRIBUTING.md",
+    "docs/CONTRIBUTING.md",
+];
+
+/// Fetch a repo's CONTRIBUTING.md body from `api.github.com`,
+/// trying the paths in [`CONTRIBUTING_PATHS`] in order. Returns the
+/// raw Markdown body of the first path that resolves, `Ok(None)` if
+/// none do, or an error on non-404 failures.
+pub async fn contributing_md(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<Option<String>, FetchError> {
+    contributing_md_at("https://api.github.com", client, owner, repo, token).await
+}
+
+/// CONTRIBUTING fetch from an arbitrary GitHub-shaped base URL, used
+/// by the wiremock integration tests and by callers who want to
+/// point at a mirror. Walks the candidate path list and returns at
+/// the first 200.
+pub async fn contributing_md_at(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<Option<String>, FetchError> {
+    for path in CONTRIBUTING_PATHS {
+        let url = format!("{base_url}/repos/{owner}/{repo}/contents/{path}");
+        if let Some(body) = get_raw_or_none(client, &url, token).await? {
+            return Ok(Some(body));
+        }
+    }
+    Ok(None)
 }
 
 /// Paginated issue list from an arbitrary GitHub-shaped base URL,

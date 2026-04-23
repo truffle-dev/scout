@@ -52,7 +52,7 @@ fn all_positive_signals_propagate() {
         &["good first issue", "C-bug"],
     );
     let r = repo("2026-04-20T00:00:00Z"); // 3 days before NOW
-    let f = factors_from(&i, &r, NOW_UNIX);
+    let f = factors_from(&i, &r, None, NOW_UNIX);
 
     assert!(f.has_reproducer);
     assert!(f.has_root_cause);
@@ -65,7 +65,7 @@ fn all_positive_signals_propagate() {
 fn no_signals_propagates_empty_factors() {
     let i = issue(Some("It broke, please fix."), "2026-01-01T00:00:00Z", &[]);
     let r = repo("2026-01-01T00:00:00Z");
-    let f = factors_from(&i, &r, NOW_UNIX);
+    let f = factors_from(&i, &r, None, NOW_UNIX);
 
     assert!(!f.has_reproducer);
     assert!(!f.has_root_cause);
@@ -76,14 +76,43 @@ fn no_signals_propagates_empty_factors() {
 }
 
 #[test]
-fn unwired_factors_default_to_false() {
+fn still_unwired_factors_default_to_false() {
     let i = issue(Some("repro"), "2026-04-23T00:00:00Z", &[]);
     let r = repo("2026-04-23T00:00:00Z");
-    let f = factors_from(&i, &r, NOW_UNIX);
+    let f = factors_from(&i, &r, None, NOW_UNIX);
 
     assert!(!f.no_crosslinked_pr);
-    assert!(!f.contributing_ok);
     assert!(!f.maintainer_touched);
+}
+
+// --- contributing_ok propagation -------------------------------------
+
+#[test]
+fn contributing_ok_true_when_no_contributing_fetched() {
+    // None (repo has no CONTRIBUTING) defaults to ok in the classifier
+    // and must propagate through the aggregator.
+    let i = issue(None, "2026-04-23T00:00:00Z", &[]);
+    let r = repo("2026-04-23T00:00:00Z");
+    let f = factors_from(&i, &r, None, NOW_UNIX);
+    assert!(f.contributing_ok);
+}
+
+#[test]
+fn contributing_ok_false_when_cla_present() {
+    let i = issue(None, "2026-04-23T00:00:00Z", &[]);
+    let r = repo("2026-04-23T00:00:00Z");
+    let body = "All contributors must sign a CLA before we can merge.";
+    let f = factors_from(&i, &r, Some(body), NOW_UNIX);
+    assert!(!f.contributing_ok);
+}
+
+#[test]
+fn contributing_ok_true_when_body_is_friendly() {
+    let i = issue(None, "2026-04-23T00:00:00Z", &[]);
+    let r = repo("2026-04-23T00:00:00Z");
+    let body = "# Contributing\n\nThanks! Open a PR.";
+    let f = factors_from(&i, &r, Some(body), NOW_UNIX);
+    assert!(f.contributing_ok);
 }
 
 // --- effort_ok branches ----------------------------------------------
@@ -92,7 +121,7 @@ fn unwired_factors_default_to_false() {
 fn effort_ok_false_on_non_effort_label_alone() {
     let i = issue(None, "2026-04-23T00:00:00Z", &["enhancement"]);
     let r = repo("2026-04-23T00:00:00Z");
-    assert!(!factors_from(&i, &r, NOW_UNIX).effort_ok);
+    assert!(!factors_from(&i, &r, None, NOW_UNIX).effort_ok);
 }
 
 #[test]
@@ -106,14 +135,14 @@ fn effort_ok_true_when_both_effort_and_non_effort_coexist() {
         &["enhancement", "good first issue"],
     );
     let r = repo("2026-04-23T00:00:00Z");
-    assert!(factors_from(&i, &r, NOW_UNIX).effort_ok);
+    assert!(factors_from(&i, &r, None, NOW_UNIX).effort_ok);
 }
 
 #[test]
 fn effort_ok_true_on_plain_bug_label() {
     let i = issue(None, "2026-04-23T00:00:00Z", &["bug", "C-bug"]);
     let r = repo("2026-04-23T00:00:00Z");
-    assert!(factors_from(&i, &r, NOW_UNIX).effort_ok);
+    assert!(factors_from(&i, &r, None, NOW_UNIX).effort_ok);
 }
 
 // --- days_since edge cases -------------------------------------------
@@ -123,7 +152,7 @@ fn future_timestamp_clamps_to_zero_days() {
     // Clock skew: issue updated_at is 1 hour ahead of NOW_UNIX.
     let i = issue(None, "2026-04-23T01:00:00Z", &[]);
     let r = repo("2026-04-23T00:00:00Z");
-    let f = factors_from(&i, &r, NOW_UNIX);
+    let f = factors_from(&i, &r, None, NOW_UNIX);
     assert_eq!(f.updated_days_ago, 0.0);
 }
 
@@ -131,7 +160,7 @@ fn future_timestamp_clamps_to_zero_days() {
 fn unparseable_timestamp_becomes_large_sentinel() {
     let i = issue(None, "not-a-timestamp", &[]);
     let r = repo("2026-04-23T00:00:00Z");
-    let f = factors_from(&i, &r, NOW_UNIX);
+    let f = factors_from(&i, &r, None, NOW_UNIX);
     // Sentinel is large enough to decay recency to 0 in the scoring
     // function; the exact number is an implementation detail. We
     // assert only the shape.
@@ -148,13 +177,40 @@ fn aggregator_plumbs_through_score() {
         &["good first issue"],
     );
     let r = repo("2026-04-23T00:00:00Z");
-    let f = factors_from(&i, &r, NOW_UNIX);
+    let f = factors_from(&i, &r, None, NOW_UNIX);
     let b = score(&f, &Weights::default());
 
     // At minimum: root_cause (0.30) + reproducer (0.10) + effort_ok
-    // (0.10) + recent (0.15) + active_repo decay at 0 days (0.00,
-    // weight defaults to 0) = 0.65. no_pr/contributing_ok/
-    // maintainer_touched are unwired, so their contributions are 0.
+    // (0.10) + recent (0.15) + contributing_ok (0.15, via None ->
+    // ok) + active_repo decay at 0 days (0.00, weight defaults to 0)
+    // = 0.80. no_pr/maintainer_touched are still unwired, so their
+    // contributions are 0.
+    assert!(
+        b.total >= 0.79 && b.total <= 0.81,
+        "expected ~0.80, got {}",
+        b.total
+    );
+}
+
+#[test]
+fn aggregator_cla_body_drops_contributing_bonus() {
+    // Same issue shape as `aggregator_plumbs_through_score`, but with
+    // a CLA-gated CONTRIBUTING body; the total should drop by exactly
+    // the contributing_ok weight (0.15).
+    let i = issue(
+        Some("Repro:\n\n```\nfoo()\n```\n\nRoot cause: at src/lib.rs:42"),
+        "2026-04-23T00:00:00Z",
+        &["good first issue"],
+    );
+    let r = repo("2026-04-23T00:00:00Z");
+    let f = factors_from(
+        &i,
+        &r,
+        Some("Sign our Contributor License Agreement."),
+        NOW_UNIX,
+    );
+    let b = score(&f, &Weights::default());
+
     assert!(
         b.total >= 0.64 && b.total <= 0.66,
         "expected ~0.65, got {}",

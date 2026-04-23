@@ -4,7 +4,8 @@
 //! kinds of false positives the scoring layer is willing to tolerate.
 
 use scout::{
-    Label, days_since, has_effort_label, has_non_effort_label, has_reproducer, has_root_cause,
+    Label, contributing_looks_ok, days_since, has_effort_label, has_non_effort_label,
+    has_reproducer, has_root_cause,
 };
 
 fn label(name: &str) -> Label {
@@ -112,6 +113,114 @@ fn root_cause_false_on_plain_prose() {
 #[test]
 fn root_cause_false_on_none_body() {
     assert!(!has_root_cause(None));
+}
+
+// --- contributing_looks_ok -------------------------------------------
+
+#[test]
+fn contributing_ok_on_missing_body() {
+    // No CONTRIBUTING in the repo: default to ok. Most small repos
+    // don't ship one and are contribution-friendly by convention.
+    assert!(contributing_looks_ok(None));
+}
+
+#[test]
+fn contributing_ok_on_plain_friendly_body() {
+    let body = "\
+        # Contributing\n\
+        Thanks for your interest! Fork the repo, open a PR, and we'll\n\
+        take a look. Please add a test for any bug fix.\n";
+    assert!(contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_cla_full_phrase() {
+    let body = "\
+        All contributors must sign our Contributor License Agreement\n\
+        before we can merge any changes.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_cla_uk_spelling() {
+    let body = "You must sign our Contributor Licence Agreement.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_cla_assistant_bot() {
+    let body = "Our cla-assistant bot will prompt you for a signature.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_easycla() {
+    let body = "See the EasyCLA docs for the signing workflow.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_eclipse_contributor_agreement() {
+    let body = "Please sign the Eclipse Contributor Agreement first.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_apache_icla() {
+    let body = "Sign the Individual Contributor License (ICLA).";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_sign_a_cla_phrasing() {
+    let body = "You will need to sign a CLA. We'll guide you through it.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_discuss_first_gate() {
+    let body = "\
+        For non-trivial changes, please discuss first in an issue.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_open_issue_first_gate() {
+    let body = "\
+        Please open an issue first before sending a pull request.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_email_first_gate() {
+    let body = "Please email us first to coordinate larger changes.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_ok_case_insensitive_match() {
+    // Uppercase should still trigger — the classifier lowers before
+    // matching.
+    let body = "SIGN OUR CONTRIBUTOR LICENSE AGREEMENT";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_ok_no_false_positive_on_cla_substring() {
+    // The narrow classifier won't match a bare "cla" or "classroom"
+    // substring; it only triggers on explicit CLA-vocabulary phrases.
+    let body = "\
+        We welcome contributions! Check out our class diagrams in\n\
+        docs/architecture.md before proposing big changes.";
+    assert!(contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_ok_no_false_positive_on_discuss_without_gate() {
+    // "We discuss things on Discord" is fine; "please discuss first"
+    // is not. The classifier wants the explicit gate phrase.
+    let body = "Join our Discord if you want to discuss ideas.";
+    assert!(contributing_looks_ok(Some(body)));
 }
 
 // --- has_effort_label ------------------------------------------------

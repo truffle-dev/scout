@@ -92,6 +92,55 @@ pub fn has_non_effort_label(labels: &[Label]) -> bool {
     })
 }
 
+/// CONTRIBUTING body looks contribution-friendly: no Contributor
+/// License Agreement gate, no "please discuss / email / contact
+/// before" gate. `None` (repo has no CONTRIBUTING) is treated as
+/// "ok" — most small repos don't ship one and they're conventionally
+/// open to drive-by PRs; the repos that do gate contributions write
+/// the gate into CONTRIBUTING explicitly.
+///
+/// Pattern set errs on the side of "not ok": over-awarding a gated
+/// repo would cost a wasted PR, under-awarding a friendly one just
+/// trims the recency bonus. The CLA vocabulary covers the common
+/// enterprise shapes (Google / Meta / Microsoft / CNCF EasyCLA /
+/// Eclipse ECA / Apache ICLA); the gate vocabulary covers the
+/// "open an issue / discuss / email / reach out first" idioms.
+pub fn contributing_looks_ok(body: Option<&str>) -> bool {
+    let Some(body) = body else {
+        return true;
+    };
+    let lower = body.to_ascii_lowercase();
+    const CLA_MARKERS: &[&str] = &[
+        "contributor license agreement",
+        "contributor licence agreement",
+        "cla-assistant",
+        "cla assistant",
+        "easycla",
+        "eclipse contributor agreement",
+        "individual contributor license",
+        "sign a cla",
+        "sign our cla",
+        "sign the cla",
+        "accept our cla",
+    ];
+    const GATE_MARKERS: &[&str] = &[
+        "please open an issue first",
+        "please open an issue before",
+        "please discuss first",
+        "please discuss before",
+        "please contact us first",
+        "please contact us before",
+        "please email us first",
+        "please email us before",
+        "please reach out first",
+        "please reach out before",
+    ];
+    !CLA_MARKERS
+        .iter()
+        .chain(GATE_MARKERS.iter())
+        .any(|m| lower.contains(m))
+}
+
 /// Days between an ISO-8601 timestamp and a reference unix-seconds
 /// `now`. Negative values are possible if the timestamp is in the
 /// future (clock skew between GitHub and the caller). Returns `None`

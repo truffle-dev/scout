@@ -3,15 +3,16 @@
 //! Breakdown`. Lives separate from the fetch/parse layers so the test
 //! suite can exercise it without touching the network.
 //!
-//! The aggregator `factors_from` binds `IssueMeta + RepoMeta + now`
-//! into a `Factors` value. Three fields (`no_crosslinked_pr`,
-//! `contributing_ok`, `maintainer_touched`) need endpoints the fetch
-//! layer doesn't expose yet; those default to `false` and will be
-//! filled in as the fetch layer grows.
+//! The aggregator `factors_from` binds `IssueMeta + RepoMeta +
+//! optional CONTRIBUTING body + now` into a `Factors` value. Two
+//! fields (`no_crosslinked_pr`, `maintainer_touched`) still need
+//! endpoints the fetch layer doesn't expose yet; those default to
+//! `false` and will be filled in as the fetch layer grows.
 
 use crate::fetch::{IssueMeta, RepoMeta};
 use crate::infer::{
-    days_since, has_effort_label, has_non_effort_label, has_reproducer, has_root_cause,
+    contributing_looks_ok, days_since, has_effort_label, has_non_effort_label, has_reproducer,
+    has_root_cause,
 };
 
 /// Observed properties of a single GitHub issue and its parent repo.
@@ -113,7 +114,10 @@ fn decay(days: f64, horizon: f64) -> f64 {
 
 /// Build a `Factors` from the metadata the fetch layer can produce
 /// today. `now_unix` is wall-clock seconds from the caller so scans
-/// use a single consistent "now" across all issues.
+/// use a single consistent "now" across all issues. `contributing`
+/// is the raw CONTRIBUTING body from [`crate::fetch::contributing_md`];
+/// `None` means the repo has none, which the classifier treats as
+/// contribution-friendly.
 ///
 /// `effort_ok` is true when a positive low-effort label is present
 /// OR when no explicit non-effort label blocks it; the positive label
@@ -122,11 +126,16 @@ fn decay(days: f64, horizon: f64) -> f64 {
 /// as "effectively never updated" rather than "just now."
 ///
 /// Fields left at their `false` defaults: `no_crosslinked_pr` (needs
-/// cross-reference search), `contributing_ok` (needs raw CONTRIBUTING
-/// fetch), `maintainer_touched` (needs comments + top-committers).
-/// A score computed from these defaults systematically under-rates
-/// issues until the fetch layer fills them in.
-pub fn factors_from(issue: &IssueMeta, repo: &RepoMeta, now_unix: i64) -> Factors {
+/// cross-reference search), `maintainer_touched` (needs comments +
+/// top-committers). A score computed from these defaults
+/// systematically under-rates issues until the fetch layer fills
+/// them in.
+pub fn factors_from(
+    issue: &IssueMeta,
+    repo: &RepoMeta,
+    contributing: Option<&str>,
+    now_unix: i64,
+) -> Factors {
     let updated_days_ago = days_to_f64(days_since(&issue.updated_at, now_unix));
     let pushed_days_ago = days_to_f64(days_since(&repo.pushed_at, now_unix));
     Factors {
@@ -136,7 +145,7 @@ pub fn factors_from(issue: &IssueMeta, repo: &RepoMeta, now_unix: i64) -> Factor
         updated_days_ago,
         pushed_days_ago,
         no_crosslinked_pr: false,
-        contributing_ok: false,
+        contributing_ok: contributing_looks_ok(contributing),
         maintainer_touched: false,
     }
 }

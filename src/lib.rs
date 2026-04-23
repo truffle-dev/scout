@@ -10,11 +10,13 @@ pub mod score;
 
 pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
 pub use fetch::{
-    DEFAULT_PAGE_CAP, FetchError, IssueMeta, Label, PullRequestRef, RepoMeta, UserRef,
-    decode_issue_list, decode_repo_meta, list_issues, list_issues_at, list_issues_paginated,
-    list_issues_paginated_at, parse_next_link, repo_meta, repo_meta_at,
+    CONTRIBUTING_PATHS, DEFAULT_PAGE_CAP, FetchError, IssueMeta, Label, PullRequestRef, RepoMeta,
+    UserRef, contributing_md, contributing_md_at, decode_issue_list, decode_repo_meta, list_issues,
+    list_issues_at, list_issues_paginated, list_issues_paginated_at, parse_next_link, repo_meta,
+    repo_meta_at,
 };
 pub use infer::{
-    days_since, has_effort_label, has_non_effort_label, has_reproducer, has_root_cause,
+    contributing_looks_ok, days_since, has_effort_label, has_non_effort_label, has_reproducer,
+    has_root_cause,
 };
 pub use score::{Breakdown, Factors, Weights, factors_from, score};
