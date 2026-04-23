@@ -3,6 +3,8 @@
 //! weights live in the user's TOML config so the scoring is auditable
 //! and tunable per-user.
 
+pub mod config;
 pub mod score;
 
+pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
 pub use score::{Breakdown, Factors, Weights, score};
