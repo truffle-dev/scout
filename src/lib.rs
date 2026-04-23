@@ -1,0 +1,8 @@
+//! scout ranks open-source issues by how likely they are to be worth
+//! contributing to. The ranking is a weighted sum of eight heuristics;
+//! weights live in the user's TOML config so the scoring is auditable
+//! and tunable per-user.
+
+pub mod score;
+
+pub use score::{Breakdown, Factors, Weights, score};

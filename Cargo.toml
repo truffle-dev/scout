@@ -1,0 +1,9 @@
+[package]
+name = "scout"
+version = "0.1.0"
+edition = "2024"
+description = "Rank open-source issues worth contributing to"
+license = "MIT"
+repository = "https://github.com/truffle-dev/scout"
+
+[dependencies]
