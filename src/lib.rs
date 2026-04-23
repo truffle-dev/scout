@@ -4,7 +4,9 @@
 //! and tunable per-user.
 
 pub mod config;
+pub mod fetch;
 pub mod score;
 
 pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
+pub use fetch::{FetchError, RepoMeta, decode_repo_meta};
 pub use score::{Breakdown, Factors, Weights, score};
