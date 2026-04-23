@@ -2,8 +2,12 @@
 //! `/repos/{owner}/{repo}` response exercise the serde derive; the
 //! oversized-payload case pins down the "extra fields are ignored"
 //! contract that keeps scout stable against GitHub adding new fields.
+//!
+//! `parse_next_link` is covered at the bottom of the file. It's a pure
+//! string parser for GitHub's Link header; shape coverage goes here
+//! alongside the other pure decoders.
 
-use scout::decode_repo_meta;
+use scout::{decode_repo_meta, parse_next_link};
 
 #[test]
 fn decodes_minimal_repo_payload() {
@@ -102,4 +106,118 @@ fn github_error_object_fails_decode() {
     }"#;
 
     assert!(decode_repo_meta(body).is_err());
+}
+
+// --- parse_next_link -------------------------------------------------
+//
+// Shape reference: GitHub emits
+//   <URL>; rel="prev", <URL>; rel="next", <URL>; rel="last", <URL>; rel="first"
+// with no whitespace-canonicalization promises. The parser only needs
+// to return the `next` URL; missing-next and empty cases must return
+// None, and malformed input must not panic.
+
+#[test]
+fn next_link_single_next_entry() {
+    let header = r#"<https://api.github.com/repos/x/y/issues?page=2>; rel="next""#;
+    assert_eq!(
+        parse_next_link(header),
+        Some("https://api.github.com/repos/x/y/issues?page=2".to_string())
+    );
+}
+
+#[test]
+fn next_link_present_with_other_rels() {
+    let header = concat!(
+        r#"<https://api.github.com/repos/x/y/issues?page=2>; rel="next", "#,
+        r#"<https://api.github.com/repos/x/y/issues?page=5>; rel="last""#
+    );
+    assert_eq!(
+        parse_next_link(header),
+        Some("https://api.github.com/repos/x/y/issues?page=2".to_string())
+    );
+}
+
+#[test]
+fn next_link_in_middle_of_entries() {
+    let header = concat!(
+        r#"<https://api.github.com/repos/x/y/issues?page=1>; rel="first", "#,
+        r#"<https://api.github.com/repos/x/y/issues?page=1>; rel="prev", "#,
+        r#"<https://api.github.com/repos/x/y/issues?page=3>; rel="next", "#,
+        r#"<https://api.github.com/repos/x/y/issues?page=5>; rel="last""#
+    );
+    assert_eq!(
+        parse_next_link(header),
+        Some("https://api.github.com/repos/x/y/issues?page=3".to_string())
+    );
+}
+
+#[test]
+fn next_link_absent_only_prev_and_last() {
+    let header = concat!(
+        r#"<https://api.github.com/repos/x/y/issues?page=1>; rel="first", "#,
+        r#"<https://api.github.com/repos/x/y/issues?page=4>; rel="prev""#
+    );
+    assert_eq!(parse_next_link(header), None);
+}
+
+#[test]
+fn next_link_empty_header_returns_none() {
+    assert_eq!(parse_next_link(""), None);
+}
+
+#[test]
+fn next_link_tolerates_unquoted_rel() {
+    let header = r#"<https://api.github.com/repos/x/y/issues?page=2>; rel=next"#;
+    assert_eq!(
+        parse_next_link(header),
+        Some("https://api.github.com/repos/x/y/issues?page=2".to_string())
+    );
+}
+
+#[test]
+fn next_link_ignores_extra_params() {
+    let header = concat!(
+        r#"<https://api.github.com/repos/x/y/issues?page=2>; "#,
+        r#"title="Issues page 2"; rel="next""#
+    );
+    assert_eq!(
+        parse_next_link(header),
+        Some("https://api.github.com/repos/x/y/issues?page=2".to_string())
+    );
+}
+
+#[test]
+fn next_link_malformed_missing_angle_bracket_returns_none() {
+    assert_eq!(
+        parse_next_link(r#"https://example.invalid; rel="next""#),
+        None
+    );
+}
+
+#[test]
+fn next_link_malformed_missing_close_bracket_returns_none() {
+    assert_eq!(
+        parse_next_link(r#"<https://example.invalid rel="next""#),
+        None
+    );
+}
+
+#[test]
+fn next_link_ignores_rel_substring() {
+    // rel="nextpage" is not a next relation; substring matching would
+    // be a false positive.
+    let header = r#"<https://api.github.com/repos/x/y/issues?page=2>; rel="nextpage""#;
+    assert_eq!(parse_next_link(header), None);
+}
+
+#[test]
+fn next_link_entry_separators_tolerate_whitespace() {
+    let header = concat!(
+        "<https://example.invalid/a>; rel=\"prev\"  ,\n   ",
+        "<https://example.invalid/b>; rel=\"next\""
+    );
+    assert_eq!(
+        parse_next_link(header),
+        Some("https://example.invalid/b".to_string())
+    );
 }

@@ -3,8 +3,13 @@
 //! response handling (decode, 404, 403, empty list). Decoder unit
 //! tests in `tests/issues.rs` cover serde shape edge cases; this file
 //! stays focused on the HTTP glue.
+//!
+//! Pagination tests at the bottom exercise the `Link: rel="next"`
+//! cursor walk. GitHub emits absolute URLs in Link headers, so each
+//! test server stitches its own `uri()` into the next-page URL to keep
+//! the walker pointed at the mock.
 
-use scout::{FetchError, list_issues_at};
+use scout::{FetchError, list_issues_at, list_issues_paginated_at};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -159,4 +164,173 @@ async fn garbage_body_returns_decode_error() {
         .unwrap_err();
 
     assert!(matches!(err, FetchError::Decode(_)));
+}
+
+// --- pagination -----------------------------------------------------
+
+/// One-item page-1 body. Used by the pagination tests to keep the
+/// issue numbers distinct across pages so the caller can verify the
+/// concatenation order.
+fn page_body(number: u64) -> String {
+    format!(
+        r#"[
+            {{
+                "number": {number},
+                "title": "p{number}",
+                "body": null,
+                "html_url": "https://github.com/a/b/issues/{number}",
+                "state": "open",
+                "labels": [],
+                "comments": 0,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "user": {{"login": "u"}}
+            }}
+        ]"#
+    )
+}
+
+#[tokio::test]
+async fn pagination_single_page_no_link_header() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/a/b/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(page_body(1)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let list = list_issues_paginated_at(&server.uri(), &client, "a", "b", None, 10)
+        .await
+        .unwrap();
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].number, 1);
+}
+
+#[tokio::test]
+async fn pagination_walks_two_pages_via_link_next() {
+    let server = MockServer::start().await;
+    let next_url = format!(
+        "{}/repos/a/b/issues?state=open&per_page=100&page=2",
+        server.uri()
+    );
+
+    // Page 1: one item + Link header pointing at page 2. The first
+    // request scout emits doesn't carry `page=`; scout only learns
+    // about the `page=` query once it follows the `rel="next"` URL.
+    Mock::given(method("GET"))
+        .and(path("/repos/a/b/issues"))
+        .and(query_param_missing("page"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(page_body(1))
+                .insert_header("link", format!(r#"<{next_url}>; rel="next""#).as_str()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2: one item, no Link header (terminal page).
+    Mock::given(method("GET"))
+        .and(path("/repos/a/b/issues"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(page_body(2)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let list = list_issues_paginated_at(&server.uri(), &client, "a", "b", None, 10)
+        .await
+        .unwrap();
+
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].number, 1);
+    assert_eq!(list[1].number, 2);
+}
+
+#[tokio::test]
+async fn pagination_stops_at_max_pages_cap() {
+    let server = MockServer::start().await;
+    let next_url = format!(
+        "{}/repos/a/b/issues?state=open&per_page=100&page=2",
+        server.uri()
+    );
+
+    // Every page returns a Link header with rel="next" pointing at
+    // page=2. Without a cap the walker would loop forever; cap=2 means
+    // the walker makes exactly two requests then returns.
+    Mock::given(method("GET"))
+        .and(path("/repos/a/b/issues"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(page_body(1))
+                .insert_header("link", format!(r#"<{next_url}>; rel="next""#).as_str()),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let list = list_issues_paginated_at(&server.uri(), &client, "a", "b", None, 2)
+        .await
+        .unwrap();
+
+    assert_eq!(list.len(), 2);
+}
+
+#[tokio::test]
+async fn pagination_aborts_and_discards_on_mid_walk_error() {
+    let server = MockServer::start().await;
+    let next_url = format!(
+        "{}/repos/a/b/issues?state=open&per_page=100&page=2",
+        server.uri()
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/repos/a/b/issues"))
+        .and(query_param_missing("page"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(page_body(1))
+                .insert_header("link", format!(r#"<{next_url}>; rel="next""#).as_str()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/a/b/issues"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let err = list_issues_paginated_at(&server.uri(), &client, "a", "b", None, 10)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, FetchError::Status { status: 500, .. }));
+}
+
+// Helper: wiremock doesn't ship a negative query_param matcher, so
+// this synthesizes one by asserting the request's query string does
+// not contain the named key. Scoped to this file to keep the shape
+// visible alongside the tests that need it.
+fn query_param_missing(key: &'static str) -> QueryParamMissing {
+    QueryParamMissing { key }
+}
+
+struct QueryParamMissing {
+    key: &'static str,
+}
+
+impl wiremock::Match for QueryParamMissing {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        !request.url.query_pairs().any(|(k, _)| k == self.key)
+    }
 }

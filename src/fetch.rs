@@ -152,6 +152,18 @@ async fn get_json<T: DeserializeOwned>(
     url: &str,
     token: Option<&str>,
 ) -> Result<T, FetchError> {
+    let (body, _next) = get_json_with_next(client, url, token).await?;
+    Ok(body)
+}
+
+/// Like `get_json`, but also returns the `rel="next"` URL from the
+/// response's `Link` header (if present). Used by paginated endpoints
+/// to walk GitHub's cursor chain without hand-rolling page numbers.
+async fn get_json_with_next<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<(T, Option<String>), FetchError> {
     let mut req = client
         .get(url)
         .header("User-Agent", USER_AGENT)
@@ -170,8 +182,64 @@ async fn get_json<T: DeserializeOwned>(
         });
     }
 
+    let next = resp
+        .headers()
+        .get(reqwest::header::LINK)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_next_link);
+
     let body = resp.text().await?;
-    Ok(serde_json::from_str(&body)?)
+    Ok((serde_json::from_str(&body)?, next))
+}
+
+/// Default page cap for paginated list endpoints. At 100 items per
+/// page this covers up to 1000 issues, which is more than enough for a
+/// single-repo scan of the active working set. A repo with more than
+/// 1000 open issues is a repo whose maintainers want triage, not a
+/// whole-list crawl from us.
+pub const DEFAULT_PAGE_CAP: usize = 10;
+
+/// Extract the `rel="next"` URL from an RFC 8288 Link header value.
+/// GitHub emits a narrow shape: comma-separated entries of the form
+/// `<URL>; rel="value"` with no commas inside the angle brackets and
+/// no other parameters we care about. Returns `None` if no `next`
+/// relation is present, if the header is empty, or if the shape is
+/// malformed enough that we can't confidently pull a URL out.
+///
+/// Public for the unit-test suite. Not part of the fetch-layer public
+/// contract in the docs sense; callers should use the paginated
+/// endpoint functions.
+pub fn parse_next_link(header: &str) -> Option<String> {
+    let mut rest = header;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == ',');
+        if rest.is_empty() {
+            return None;
+        }
+        if !rest.starts_with('<') {
+            return None;
+        }
+        let url_end = rest.find('>')?;
+        let url = &rest[1..url_end];
+        rest = &rest[url_end + 1..];
+
+        let entry_end = rest.find(',').unwrap_or(rest.len());
+        let params = &rest[..entry_end];
+        rest = &rest[entry_end..];
+
+        for part in params.split(';') {
+            let part = part.trim();
+            let Some(eq) = part.find('=') else {
+                continue;
+            };
+            let (k, v) = part.split_at(eq);
+            let k = k.trim();
+            let v = v[1..].trim().trim_matches('"');
+            if k == "rel" && v == "next" {
+                return Some(url.to_string());
+            }
+        }
+    }
 }
 
 /// Fetch repo metadata from `api.github.com`.
@@ -225,4 +293,56 @@ pub async fn list_issues_at(
 ) -> Result<Vec<IssueMeta>, FetchError> {
     let url = format!("{base_url}/repos/{owner}/{repo}/issues?state=open&per_page=100");
     get_json(client, &url, token).await
+}
+
+/// Fetch all open issues for a repo from `api.github.com`, walking
+/// GitHub's `Link: rel="next"` cursor chain up to `DEFAULT_PAGE_CAP`
+/// pages. Stops early if a page has no `next` relation. Returns the
+/// concatenated issue list.
+pub async fn list_issues_paginated(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<Vec<IssueMeta>, FetchError> {
+    list_issues_paginated_at(
+        "https://api.github.com",
+        client,
+        owner,
+        repo,
+        token,
+        DEFAULT_PAGE_CAP,
+    )
+    .await
+}
+
+/// Paginated issue list from an arbitrary GitHub-shaped base URL,
+/// with an explicit page cap. `max_pages` is a hard upper bound: the
+/// walker returns the items collected so far if the cap is reached
+/// before a page without `rel="next"` appears. A failure on any page
+/// aborts the walk and discards prior pages; partial page sets would
+/// mislead the scoring layer into under-rating issues on later pages,
+/// so the caller should re-run the scan instead of coping with the
+/// truncation.
+pub async fn list_issues_paginated_at(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+    max_pages: usize,
+) -> Result<Vec<IssueMeta>, FetchError> {
+    let first = format!("{base_url}/repos/{owner}/{repo}/issues?state=open&per_page=100");
+    let mut url = first;
+    let mut out: Vec<IssueMeta> = Vec::new();
+    for _ in 0..max_pages {
+        let (page, next): (Vec<IssueMeta>, Option<String>) =
+            get_json_with_next(client, &url, token).await?;
+        out.extend(page);
+        match next {
+            Some(n) => url = n,
+            None => return Ok(out),
+        }
+    }
+    Ok(out)
 }
