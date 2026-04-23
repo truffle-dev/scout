@@ -2,6 +2,17 @@
 //! linear-decay. Pure: no IO, no async, just `Factors + Weights ->
 //! Breakdown`. Lives separate from the fetch/parse layers so the test
 //! suite can exercise it without touching the network.
+//!
+//! The aggregator `factors_from` binds `IssueMeta + RepoMeta + now`
+//! into a `Factors` value. Three fields (`no_crosslinked_pr`,
+//! `contributing_ok`, `maintainer_touched`) need endpoints the fetch
+//! layer doesn't expose yet; those default to `false` and will be
+//! filled in as the fetch layer grows.
+
+use crate::fetch::{IssueMeta, RepoMeta};
+use crate::infer::{
+    days_since, has_effort_label, has_non_effort_label, has_reproducer, has_root_cause,
+};
 
 /// Observed properties of a single GitHub issue and its parent repo.
 /// Populated by the fetch layer from REST + GraphQL; consumed by `score`.
@@ -98,4 +109,46 @@ fn b(v: bool) -> f64 {
 
 fn decay(days: f64, horizon: f64) -> f64 {
     (1.0 - (days / horizon)).clamp(0.0, 1.0)
+}
+
+/// Build a `Factors` from the metadata the fetch layer can produce
+/// today. `now_unix` is wall-clock seconds from the caller so scans
+/// use a single consistent "now" across all issues.
+///
+/// `effort_ok` is true when a positive low-effort label is present
+/// OR when no explicit non-effort label blocks it; the positive label
+/// wins when both coexist. Days that fail to parse decay to `0.0`
+/// score via a large sentinel, which treats unparseable timestamps
+/// as "effectively never updated" rather than "just now."
+///
+/// Fields left at their `false` defaults: `no_crosslinked_pr` (needs
+/// cross-reference search), `contributing_ok` (needs raw CONTRIBUTING
+/// fetch), `maintainer_touched` (needs comments + top-committers).
+/// A score computed from these defaults systematically under-rates
+/// issues until the fetch layer fills them in.
+pub fn factors_from(issue: &IssueMeta, repo: &RepoMeta, now_unix: i64) -> Factors {
+    let updated_days_ago = days_to_f64(days_since(&issue.updated_at, now_unix));
+    let pushed_days_ago = days_to_f64(days_since(&repo.pushed_at, now_unix));
+    Factors {
+        has_root_cause: has_root_cause(issue.body.as_deref()),
+        has_reproducer: has_reproducer(issue.body.as_deref()),
+        effort_ok: has_effort_label(&issue.labels) || !has_non_effort_label(&issue.labels),
+        updated_days_ago,
+        pushed_days_ago,
+        no_crosslinked_pr: false,
+        contributing_ok: false,
+        maintainer_touched: false,
+    }
+}
+
+/// Map a signed days-delta to the `f64` the `decay` function expects.
+/// `None` (parse failure) becomes a large positive so the recency
+/// decay clamps to 0. Negative deltas (future timestamps from clock
+/// skew) become `0.0` so they score as maximally recent.
+fn days_to_f64(days: Option<i64>) -> f64 {
+    match days {
+        Some(n) if n < 0 => 0.0,
+        Some(n) => n as f64,
+        None => 1_000_000.0,
+    }
 }

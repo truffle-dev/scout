@@ -13,5 +13,7 @@ pub use fetch::{
     FetchError, IssueMeta, Label, PullRequestRef, RepoMeta, UserRef, decode_issue_list,
     decode_repo_meta, list_issues, list_issues_at, repo_meta, repo_meta_at,
 };
-pub use infer::{days_since, has_effort_label, has_reproducer, has_root_cause};
-pub use score::{Breakdown, Factors, Weights, score};
+pub use infer::{
+    days_since, has_effort_label, has_non_effort_label, has_reproducer, has_root_cause,
+};
+pub use score::{Breakdown, Factors, Weights, factors_from, score};

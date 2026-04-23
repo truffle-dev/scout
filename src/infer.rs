@@ -77,6 +77,21 @@ pub fn has_effort_label(labels: &[Label]) -> bool {
     })
 }
 
+/// Label set contains a marker that says "this isn't an actionable
+/// bug." Paired with `has_effort_label` by the aggregator to derive
+/// the `effort_ok` factor; the positive low-effort label wins when
+/// both are present.
+///
+/// Same exact-match policy as `has_effort_label`.
+pub fn has_non_effort_label(labels: &[Label]) -> bool {
+    const NON_EFFORT: &[&str] = &["enhancement", "question", "design", "rfc", "discussion"];
+    labels.iter().any(|l| {
+        NON_EFFORT
+            .iter()
+            .any(|&marker| l.name.eq_ignore_ascii_case(marker))
+    })
+}
+
 /// Days between an ISO-8601 timestamp and a reference unix-seconds
 /// `now`. Negative values are possible if the timestamp is in the
 /// future (clock skew between GitHub and the caller). Returns `None`

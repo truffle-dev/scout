@@ -3,7 +3,9 @@
 //! `None` body, empty string, case-insensitive matching, and the
 //! kinds of false positives the scoring layer is willing to tolerate.
 
-use scout::{Label, days_since, has_effort_label, has_reproducer, has_root_cause};
+use scout::{
+    Label, days_since, has_effort_label, has_non_effort_label, has_reproducer, has_root_cause,
+};
 
 fn label(name: &str) -> Label {
     Label {
@@ -162,6 +164,58 @@ fn effort_label_false_on_near_miss() {
     // negatives over false positives on the effort signal.
     assert!(!has_effort_label(&[label("effort/high")]));
     assert!(!has_effort_label(&[label("needs-effort-estimate")]));
+}
+
+// --- has_non_effort_label --------------------------------------------
+
+#[test]
+fn non_effort_label_true_on_enhancement() {
+    assert!(has_non_effort_label(&[label("enhancement")]));
+}
+
+#[test]
+fn non_effort_label_true_on_question() {
+    assert!(has_non_effort_label(&[label("question")]));
+}
+
+#[test]
+fn non_effort_label_true_on_rfc_mixed_case() {
+    assert!(has_non_effort_label(&[label("RFC")]));
+}
+
+#[test]
+fn non_effort_label_true_on_design() {
+    assert!(has_non_effort_label(&[label("Design")]));
+}
+
+#[test]
+fn non_effort_label_true_when_mixed_with_other_labels() {
+    assert!(has_non_effort_label(&[
+        label("C-bug"),
+        label("discussion"),
+        label("A-resolver"),
+    ]));
+}
+
+#[test]
+fn non_effort_label_false_on_plain_bug() {
+    assert!(!has_non_effort_label(&[label("bug")]));
+    assert!(!has_non_effort_label(&[
+        label("C-bug"),
+        label("A-resolver")
+    ]));
+}
+
+#[test]
+fn non_effort_label_false_on_empty_labels() {
+    assert!(!has_non_effort_label(&[]));
+}
+
+#[test]
+fn non_effort_label_false_on_near_miss() {
+    // "enhancement-request" is not the same label as "enhancement".
+    assert!(!has_non_effort_label(&[label("enhancement-request")]));
+    assert!(!has_non_effort_label(&[label("discuss")]));
 }
 
 // --- days_since ------------------------------------------------------
