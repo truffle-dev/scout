@@ -3,7 +3,7 @@
 //! `None` body, empty string, case-insensitive matching, and the
 //! kinds of false positives the scoring layer is willing to tolerate.
 
-use scout::{Label, has_effort_label, has_reproducer, has_root_cause};
+use scout::{Label, days_since, has_effort_label, has_reproducer, has_root_cause};
 
 fn label(name: &str) -> Label {
     Label {
@@ -162,4 +162,90 @@ fn effort_label_false_on_near_miss() {
     // negatives over false positives on the effort signal.
     assert!(!has_effort_label(&[label("effort/high")]));
     assert!(!has_effort_label(&[label("needs-effort-estimate")]));
+}
+
+// --- days_since ------------------------------------------------------
+//
+// Anchor values used below come from arithmetic on the Gregorian
+// calendar; each "now" constant is the unix-seconds value of a
+// specific UTC wall-clock moment, computed independently of the
+// parser being tested. Matching the parser against these anchors
+// keeps the tests honest: a bug in the JDN math would produce a
+// different second count and the assertion would fire.
+
+// 1970-01-01T00:00:00Z by definition.
+const EPOCH: i64 = 0;
+
+// 2000-01-01T00:00:00Z. 30 years after epoch; 7 leap years (1972,
+// 1976, 1980, 1984, 1988, 1992, 1996) add 7 days. 10957 * 86400.
+const Y2K: i64 = 946_684_800;
+
+// 2026-01-01T00:00:00Z. 26 years after Y2K; 7 leap years (2000,
+// 2004, 2008, 2012, 2016, 2020, 2024) add 7 days. 9497 * 86400
+// added to Y2K.
+const Y2026: i64 = 1_767_225_600;
+
+#[test]
+fn days_since_epoch_at_epoch_is_zero() {
+    assert_eq!(days_since("1970-01-01T00:00:00Z", EPOCH), Some(0));
+}
+
+#[test]
+fn days_since_epoch_one_day_later_is_one() {
+    assert_eq!(days_since("1970-01-01T00:00:00Z", EPOCH + 86_400), Some(1));
+}
+
+#[test]
+fn days_since_epoch_one_second_short_of_day_is_zero() {
+    // Whole days only; 23h59m59s ago still counts as same-day.
+    assert_eq!(days_since("1970-01-01T00:00:00Z", EPOCH + 86_399), Some(0));
+}
+
+#[test]
+fn days_since_y2k_is_correct() {
+    assert_eq!(days_since("2000-01-01T00:00:00Z", Y2K), Some(0));
+    assert_eq!(
+        days_since("2000-01-01T00:00:00Z", Y2K + 30 * 86_400),
+        Some(30)
+    );
+}
+
+#[test]
+fn days_since_2026_anchor_is_correct() {
+    assert_eq!(days_since("2026-01-01T00:00:00Z", Y2026), Some(0));
+    assert_eq!(
+        days_since("2026-01-01T00:00:00Z", Y2026 + 365 * 86_400),
+        Some(365)
+    );
+}
+
+#[test]
+fn days_since_future_timestamp_is_negative() {
+    // Clock skew: timestamp is one hour after `now`.
+    // div_euclid floors toward negative infinity, so even a
+    // small negative delta crosses the zero-day boundary.
+    assert_eq!(days_since("1970-01-01T01:00:00Z", EPOCH), Some(-1));
+}
+
+#[test]
+fn days_since_invalid_returns_none() {
+    // Wrong length.
+    assert_eq!(days_since("2026-01-01", Y2026), None);
+    // Missing Z.
+    assert_eq!(days_since("2026-01-01T00:00:00", Y2026), None);
+    // Offset instead of Z.
+    assert_eq!(days_since("2026-01-01T00:00:00+00:00", Y2026), None);
+    // Non-numeric field.
+    assert_eq!(days_since("2026-XX-01T00:00:00Z", Y2026), None);
+    // Empty.
+    assert_eq!(days_since("", Y2026), None);
+}
+
+#[test]
+fn days_since_out_of_range_fields_return_none() {
+    assert_eq!(days_since("2026-13-01T00:00:00Z", Y2026), None);
+    assert_eq!(days_since("2026-00-01T00:00:00Z", Y2026), None);
+    assert_eq!(days_since("2026-02-32T00:00:00Z", Y2026), None);
+    assert_eq!(days_since("2026-01-01T24:00:00Z", Y2026), None);
+    assert_eq!(days_since("2026-01-01T00:60:00Z", Y2026), None);
 }
