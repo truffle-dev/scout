@@ -8,5 +8,8 @@ pub mod fetch;
 pub mod score;
 
 pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
-pub use fetch::{FetchError, RepoMeta, decode_repo_meta, repo_meta, repo_meta_at};
+pub use fetch::{
+    FetchError, IssueMeta, Label, PullRequestRef, RepoMeta, UserRef, decode_issue_list,
+    decode_repo_meta, list_issues, list_issues_at, repo_meta, repo_meta_at,
+};
 pub use score::{Breakdown, Factors, Weights, score};

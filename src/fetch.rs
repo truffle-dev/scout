@@ -1,23 +1,23 @@
-//! Fetch-layer types, a pure JSON decoder, and an async HTTP client
-//! for a single GitHub `/repos/{owner}/{repo}` response.
+//! Fetch-layer types, pure decoders, and async HTTP clients for the
+//! GitHub endpoints scout depends on.
 //!
-//! The decode step is split from the HTTP call so the serde shape is
-//! testable from a captured payload without requiring a network call
-//! or an async runtime. The HTTP call itself is parameterized on the
-//! base URL so integration tests can point it at a mock server.
+//! The decode step is split from the HTTP call on every endpoint so the
+//! serde shapes are testable from captured payloads without requiring a
+//! network call or an async runtime. The HTTP calls are parameterized
+//! on the base URL so integration tests can point them at a mock
+//! server.
 //!
-//! The on-the-wire response from GitHub carries dozens of fields we
-//! don't care about. `RepoMeta` picks out only what the scoring layer
-//! needs (pushed_at drives `active_repo` decay; archived + open_issues
-//! drive the watchlist filter; full_name is the canonical slug).
+//! On-the-wire responses from GitHub carry dozens of fields we don't
+//! care about. We slice out only what the scoring layer needs; extra
+//! fields are ignored because `#[derive(Deserialize)]` without
+//! `deny_unknown_fields` tolerates them. GitHub adds fields over time;
+//! we don't want a new upstream field to break the parse.
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 /// Minimal repo metadata sliced out of a `/repos/{owner}/{repo}`
-/// response. Extra fields in the upstream JSON are ignored, which is
-/// the behavior `#[derive(Deserialize)]` gives us without
-/// `deny_unknown_fields`. GitHub adds fields over time; we don't want
-/// a new upstream field to break the parse.
+/// response.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RepoMeta {
     /// `owner/repo` slug, same shape scout uses internally.
@@ -25,22 +25,99 @@ pub struct RepoMeta {
     /// Star count. Not used in the default ranking, surfaced for
     /// `scout explain`.
     pub stargazers_count: u32,
-    /// Open-issue count at fetch time. Used by watchlist filtering to
-    /// skip repos that have nothing triageable.
+    /// Open-issue count at fetch time. Note: GitHub counts open PRs
+    /// in this number too.
     pub open_issues_count: u32,
-    /// ISO-8601 timestamp of the last push to the repo. Parsing into a
-    /// datetime happens in the scoring layer so this module stays free
-    /// of a chrono dependency.
+    /// ISO-8601 timestamp of the last push to the repo.
     pub pushed_at: String,
-    /// GitHub marks archived repos as read-only. We never rank issues
-    /// in archived repos, regardless of other signals.
+    /// GitHub marks archived repos as read-only.
     pub archived: bool,
 }
 
+/// Minimal issue metadata sliced out of a single element of a
+/// `/repos/{owner}/{repo}/issues` response. GitHub's issues endpoint
+/// returns both true issues and PRs; the `pull_request` field is only
+/// present when the item is a PR. Callers filter via
+/// [`IssueMeta::is_pull_request`] depending on whether they want the
+/// issues-only subset.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct IssueMeta {
+    /// Issue number as shown in the URL (e.g. `#1234`).
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue body (Markdown). `null` in the response if empty; we
+    /// surface that as `None`.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Browser URL for the issue.
+    pub html_url: String,
+    /// `"open"` or `"closed"`. The fetch layer defaults to open; we
+    /// keep the field so a caller that wants closed issues still gets
+    /// the truth.
+    pub state: String,
+    /// Label names. We don't care about color/description on the
+    /// label objects, only the names, but we decode the full object
+    /// to stay faithful to the API and let a future scoring pass
+    /// reach for more fields without another migration.
+    pub labels: Vec<Label>,
+    /// Comment count at fetch time. Drives the `maintainer_touched`
+    /// heuristic when paired with a comments-author fetch.
+    pub comments: u32,
+    /// ISO-8601 issue-creation timestamp.
+    pub created_at: String,
+    /// ISO-8601 last-activity timestamp.
+    pub updated_at: String,
+    /// Original reporter.
+    pub user: UserRef,
+    /// Present iff this "issue" is a PR. The `html_url` inside points
+    /// at the PR page; existence alone is enough to classify.
+    #[serde(default)]
+    pub pull_request: Option<PullRequestRef>,
+}
+
+impl IssueMeta {
+    /// Whether this item is a pull request. GitHub's issues endpoint
+    /// returns both; scoring usually wants the issues-only subset.
+    pub fn is_pull_request(&self) -> bool {
+        self.pull_request.is_some()
+    }
+}
+
+/// Single label name. We deserialize as an object (matching GitHub's
+/// wire shape) and expose only the name, which is all the scoring
+/// layer currently consumes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Label {
+    /// Label text (`"bug"`, `"good first issue"`, `"P1"`, etc.).
+    pub name: String,
+}
+
+/// Reference to a GitHub user. The wire shape is much larger; we
+/// decode only what the scoring layer and `scout explain` need.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct UserRef {
+    /// GitHub username.
+    pub login: String,
+}
+
+/// Reference to the PR side of a PR-shaped "issue". Presence of this
+/// field in an `/issues` response means the item is a PR.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PullRequestRef {
+    /// Browser URL of the pull request.
+    pub html_url: String,
+}
+
 /// Parse a `/repos/{owner}/{repo}` JSON body into a `RepoMeta`. Pure:
-/// no IO, no async. Call this from both the live HTTP path and from
-/// tests that want to exercise the decode against a captured fixture.
+/// no IO, no async.
 pub fn decode_repo_meta(json: &str) -> Result<RepoMeta, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
+/// Parse a `/repos/{owner}/{repo}/issues` JSON body into a list of
+/// `IssueMeta`. Pure: no IO, no async.
+pub fn decode_issue_list(json: &str) -> Result<Vec<IssueMeta>, serde_json::Error> {
     serde_json::from_str(json)
 }
 
@@ -55,9 +132,9 @@ pub enum FetchError {
     /// auth issue.
     #[error("github returned {status} for {url}")]
     Status { status: u16, url: String },
-    /// JSON body did not match `RepoMeta`'s shape. Usually means GitHub
-    /// returned an error object (message + documentation_url) instead
-    /// of a repo object, or the endpoint changed.
+    /// JSON body did not match the expected shape. Usually means
+    /// GitHub returned an error object instead of the payload we
+    /// asked for, or the endpoint changed.
     #[error("decode failed: {0}")]
     Decode(#[from] serde_json::Error),
 }
@@ -66,8 +143,38 @@ pub enum FetchError {
 /// requests without it are rejected.
 const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
-/// Fetch repo metadata from `api.github.com`. Thin convenience wrapper
-/// around [`repo_meta_at`] with the production base URL baked in.
+/// Shared GET helper for JSON endpoints. Handles the request-shaping
+/// (User-Agent, Accept, X-GitHub-Api-Version, optional bearer auth),
+/// status check, and decode. Extracted so each endpoint function stays
+/// focused on its URL and the shape of the response.
+async fn get_json<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<T, FetchError> {
+    let mut req = client
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+
+    let resp = req.send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(FetchError::Status {
+            status: status.as_u16(),
+            url: url.to_string(),
+        });
+    }
+
+    let body = resp.text().await?;
+    Ok(serde_json::from_str(&body)?)
+}
+
+/// Fetch repo metadata from `api.github.com`.
 pub async fn repo_meta(
     client: &reqwest::Client,
     owner: &str,
@@ -89,25 +196,33 @@ pub async fn repo_meta_at(
     token: Option<&str>,
 ) -> Result<RepoMeta, FetchError> {
     let url = format!("{base_url}/repos/{owner}/{repo}");
+    get_json(client, &url, token).await
+}
 
-    let mut req = client
-        .get(&url)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28");
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
+/// Fetch the first page of open issues for a repo from
+/// `api.github.com`. Pagination lands in a follow-up commit; this
+/// function returns whatever the first page contains (up to 100
+/// items) and is enough for small repos or a "what's hot today"
+/// sample.
+pub async fn list_issues(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<Vec<IssueMeta>, FetchError> {
+    list_issues_at("https://api.github.com", client, owner, repo, token).await
+}
 
-    let resp = req.send().await?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(FetchError::Status {
-            status: status.as_u16(),
-            url,
-        });
-    }
-
-    let body = resp.text().await?;
-    Ok(decode_repo_meta(&body)?)
+/// Single-page issue list from an arbitrary GitHub-shaped base URL.
+/// Returns up to 100 open issues (and PR-shaped items; caller filters
+/// via [`IssueMeta::is_pull_request`] if they want issues-only).
+pub async fn list_issues_at(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<Vec<IssueMeta>, FetchError> {
+    let url = format!("{base_url}/repos/{owner}/{repo}/issues?state=open&per_page=100");
+    get_json(client, &url, token).await
 }
