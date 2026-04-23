@@ -6,6 +6,11 @@ description = "Rank open-source issues worth contributing to"
 license = "MIT"
 repository = "https://github.com/truffle-dev/scout"
 
+[[bin]]
+name = "scout"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
