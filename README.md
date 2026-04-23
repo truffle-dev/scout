@@ -1,5 +1,7 @@
 # scout
 
+[![CI](https://github.com/truffle-dev/scout/actions/workflows/ci.yml/badge.svg)](https://github.com/truffle-dev/scout/actions/workflows/ci.yml)
+
 Rank open-source issues worth contributing to.
 
 Finding a ready first PR is a filter-plus-score problem. The
