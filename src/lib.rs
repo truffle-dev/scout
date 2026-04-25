@@ -6,6 +6,7 @@
 pub mod config;
 pub mod fetch;
 pub mod infer;
+pub mod init;
 pub mod score;
 
 pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
@@ -18,5 +19,9 @@ pub use fetch::{
 pub use infer::{
     contributing_looks_ok, days_since, has_effort_label, has_non_effort_label, has_reproducer,
     has_root_cause,
+};
+pub use init::{
+    InitError, InitSummary, WriteOutcome, default_config_path, default_watchlist_path,
+    write_starter_files,
 };
 pub use score::{Breakdown, Factors, Weights, factors_from, score};

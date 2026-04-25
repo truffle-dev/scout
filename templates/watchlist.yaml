@@ -1,0 +1,10 @@
+# scout watchlist. List the GitHub repositories you want scout to scan
+# for issues worth contributing to. One entry per repo, in OWNER/NAME
+# form. Comments and blank lines are ignored.
+#
+# Replace the examples below with the repos you actually care about.
+
+repos:
+  # - rust-lang/rust
+  # - tokio-rs/tokio
+  # - clap-rs/clap

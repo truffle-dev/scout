@@ -21,10 +21,11 @@ Pre-alpha. The internals ship in this order:
    ISO-8601 day deltas) and the `factors_from` aggregator
    binding fetch output to a scoring `Factors`. Implemented
    + tested.
-4. CLI wiring. Not yet: every `scout` subcommand still exits
-   with `fetch layer not implemented yet` (exit code 2)
-   because the command surface hasn't been plumbed to the
-   fetch layer. This is the next milestone.
+4. CLI wiring. `scout init` is wired and writes the starter
+   `config.toml` and `watchlist.yaml` under `~/.config/scout/`
+   (XDG-aware). `scan`, `took`, and `explain` still exit with
+   `fetch layer not implemented yet` (exit code 2). Plumbing
+   them to the fetch layer is the next milestone.
 
 Three `Factors` fields also remain at `false` defaults
 (`no_crosslinked_pr`, `contributing_ok`, `maintainer_touched`)

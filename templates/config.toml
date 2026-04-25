@@ -1,0 +1,33 @@
+# scout configuration. Every key has a built-in default; this file is
+# the auditable copy you can tune. Unknown keys fail the parse.
+
+[auth]
+# Path to a file containing a GitHub personal access token. Tilde
+# expansion is honored. Unset means fall back to $GITHUB_TOKEN.
+# token_path = "~/.config/scout/token"
+
+[weights]
+# Eight heuristics, weights in [0, 1]. Summed per issue, capped at 1.0
+# for display. See the README for what each one measures.
+root_cause         = 0.30
+no_pr              = 0.20
+recent             = 0.15
+contributing_ok    = 0.15
+reproducer         = 0.10
+effort_ok          = 0.10
+maintainer_touched = 0.05
+active_repo        = 0.00
+
+[filters]
+# Issues older than this many days are dropped before scoring.
+max_age_days   = 30
+# Issues whose final score falls below this threshold are dropped.
+min_score      = 0.50
+# Labels that disqualify an issue regardless of score.
+exclude_labels = ["wontfix", "invalid", "duplicate"]
+
+[output]
+# One of "auto", "always", "never". Validated at the CLI layer.
+color = "auto"
+# Maximum number of issues to print across all repos.
+limit = 20

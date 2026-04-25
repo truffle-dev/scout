@@ -4,7 +4,7 @@
 //! ledger for cooldown tracking, `explain` shows the score breakdown for
 //! a single issue.
 //!
-//! Fetch + render are not implemented yet; each subcommand exits with a
+//! `init` is wired. `scan`, `took`, and `explain` still exit with a
 //! "not yet implemented" message rather than a panic so the binary is
 //! safe to hand to someone who wants to poke at it. The shape is fixed
 //! here so the upcoming fetch-layer commits slot in without renaming
@@ -13,6 +13,7 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use scout::init;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -74,10 +75,10 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Init { .. }
-        | Command::Scan { .. }
-        | Command::Took { .. }
-        | Command::Explain { .. } => {
+        Command::Init { force } => {
+            init::run(cli.config.as_deref(), cli.watchlist.as_deref(), force)
+        }
+        Command::Scan { .. } | Command::Took { .. } | Command::Explain { .. } => {
             eprintln!("scout: fetch layer not implemented yet");
             ExitCode::from(2)
         }
