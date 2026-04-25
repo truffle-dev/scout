@@ -4,7 +4,7 @@
 //! ledger for cooldown tracking, `explain` shows the score breakdown for
 //! a single issue.
 //!
-//! `init` is wired. `scan`, `took`, and `explain` still exit with a
+//! `init` and `took` are wired. `scan` and `explain` still exit with a
 //! "not yet implemented" message rather than a panic so the binary is
 //! safe to hand to someone who wants to poke at it. The shape is fixed
 //! here so the upcoming fetch-layer commits slot in without renaming
@@ -13,7 +13,7 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use scout::init;
+use scout::{init, took};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -31,6 +31,11 @@ struct Cli {
     /// ~/.config/scout/watchlist.yaml.
     #[arg(long, global = true, value_name = "PATH")]
     watchlist: Option<String>,
+
+    /// Path to the JSONL contribution ledger. Defaults to
+    /// ~/.config/scout/ledger.jsonl.
+    #[arg(long, global = true, value_name = "PATH")]
+    ledger: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -78,7 +83,8 @@ fn main() -> ExitCode {
         Command::Init { force } => {
             init::run(cli.config.as_deref(), cli.watchlist.as_deref(), force)
         }
-        Command::Scan { .. } | Command::Took { .. } | Command::Explain { .. } => {
+        Command::Took { issue } => took::run(cli.ledger.as_deref(), &issue),
+        Command::Scan { .. } | Command::Explain { .. } => {
             eprintln!("scout: fetch layer not implemented yet");
             ExitCode::from(2)
         }

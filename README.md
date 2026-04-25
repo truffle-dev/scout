@@ -21,11 +21,13 @@ Pre-alpha. The internals ship in this order:
    ISO-8601 day deltas) and the `factors_from` aggregator
    binding fetch output to a scoring `Factors`. Implemented
    + tested.
-4. CLI wiring. `scout init` is wired and writes the starter
-   `config.toml` and `watchlist.yaml` under `~/.config/scout/`
-   (XDG-aware). `scan`, `took`, and `explain` still exit with
-   `fetch layer not implemented yet` (exit code 2). Plumbing
-   them to the fetch layer is the next milestone.
+4. CLI wiring. `scout init` writes the starter `config.toml` and
+   `watchlist.yaml` under `~/.config/scout/` (XDG-aware). `scout
+   took OWNER/REPO#N` appends a JSONL entry to
+   `~/.config/scout/ledger.jsonl` so the cooldown filter can skip the
+   issue on subsequent scans. `scan` and `explain` still exit with
+   `fetch layer not implemented yet` (exit code 2). Plumbing them to
+   the fetch layer is the next milestone.
 
 Three `Factors` fields also remain at `false` defaults
 (`no_crosslinked_pr`, `contributing_ok`, `maintainer_touched`)
@@ -69,7 +71,7 @@ scout explain OWNER/REPO#N
     Show the score breakdown for a single issue.
 ```
 
-Global flags: `--config PATH`, `--watchlist PATH`.
+Global flags: `--config PATH`, `--watchlist PATH`, `--ledger PATH`.
 
 ## How it ranks
 

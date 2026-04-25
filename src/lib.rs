@@ -8,6 +8,7 @@ pub mod fetch;
 pub mod infer;
 pub mod init;
 pub mod score;
+pub mod took;
 
 pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
 pub use fetch::{
@@ -25,3 +26,7 @@ pub use init::{
     write_starter_files,
 };
 pub use score::{Breakdown, Factors, Weights, factors_from, score};
+pub use took::{
+    IssueRef, ParseError, TookError, append_entry, default_ledger_path, format_iso8601_z,
+    now_iso8601_z, parse_issue_ref,
+};
