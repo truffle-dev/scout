@@ -109,6 +109,22 @@ pub struct PullRequestRef {
     pub html_url: String,
 }
 
+/// Minimal issue-comment metadata sliced out of a single element of a
+/// `/repos/{owner}/{repo}/issues/{issue_number}/comments` response.
+/// Drives the `maintainer_touched` heuristic: any comment from a user
+/// whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`
+/// counts as a maintainer touch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CommentMeta {
+    /// Comment author.
+    pub user: UserRef,
+    /// Reporter's relationship to the repo at the time the comment was
+    /// posted. Documented values include `OWNER`, `MEMBER`,
+    /// `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIMER`,
+    /// `FIRST_TIME_CONTRIBUTOR`, `MANNEQUIN`, `NONE`.
+    pub author_association: String,
+}
+
 /// Parse a `/repos/{owner}/{repo}` JSON body into a `RepoMeta`. Pure:
 /// no IO, no async.
 pub fn decode_repo_meta(json: &str) -> Result<RepoMeta, serde_json::Error> {
@@ -118,6 +134,12 @@ pub fn decode_repo_meta(json: &str) -> Result<RepoMeta, serde_json::Error> {
 /// Parse a `/repos/{owner}/{repo}/issues` JSON body into a list of
 /// `IssueMeta`. Pure: no IO, no async.
 pub fn decode_issue_list(json: &str) -> Result<Vec<IssueMeta>, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
+/// Parse a `/repos/{owner}/{repo}/issues/{issue_number}/comments` JSON
+/// body into a list of `CommentMeta`. Pure: no IO, no async.
+pub fn decode_comment_list(json: &str) -> Result<Vec<CommentMeta>, serde_json::Error> {
     serde_json::from_str(json)
 }
 
@@ -326,6 +348,46 @@ pub async fn list_issues_at(
     token: Option<&str>,
 ) -> Result<Vec<IssueMeta>, FetchError> {
     let url = format!("{base_url}/repos/{owner}/{repo}/issues?state=open&per_page=100");
+    get_json(client, &url, token).await
+}
+
+/// Fetch the first page of comments on a single issue from
+/// `api.github.com`. Returns up to 100 comments. The `maintainer_touched`
+/// heuristic only needs to know whether *any* maintainer comment exists,
+/// so first-page coverage is enough for the bool; later pages would only
+/// matter if the first 100 comments contained zero maintainer touches and
+/// later ones did, which is rare in practice.
+pub async fn list_issue_comments(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    token: Option<&str>,
+) -> Result<Vec<CommentMeta>, FetchError> {
+    list_issue_comments_at(
+        "https://api.github.com",
+        client,
+        owner,
+        repo,
+        issue_number,
+        token,
+    )
+    .await
+}
+
+/// Single-page issue-comments list from an arbitrary GitHub-shaped base
+/// URL. Decoupled from the live `api.github.com` host so wiremock tests
+/// can drive the same code path against a captured payload.
+pub async fn list_issue_comments_at(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    token: Option<&str>,
+) -> Result<Vec<CommentMeta>, FetchError> {
+    let url =
+        format!("{base_url}/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100");
     get_json(client, &url, token).await
 }
 

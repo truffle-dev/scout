@@ -4,13 +4,20 @@
 //! kinds of false positives the scoring layer is willing to tolerate.
 
 use scout::{
-    Label, contributing_looks_ok, days_since, has_effort_label, has_non_effort_label,
-    has_reproducer, has_root_cause,
+    CommentMeta, Label, UserRef, contributing_looks_ok, days_since, has_effort_label,
+    has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
 };
 
 fn label(name: &str) -> Label {
     Label {
         name: name.to_string(),
+    }
+}
+
+fn comment(association: &str) -> CommentMeta {
+    CommentMeta {
+        user: UserRef { login: "u".into() },
+        author_association: association.into(),
     }
 }
 
@@ -411,4 +418,62 @@ fn days_since_out_of_range_fields_return_none() {
     assert_eq!(days_since("2026-02-32T00:00:00Z", Y2026), None);
     assert_eq!(days_since("2026-01-01T24:00:00Z", Y2026), None);
     assert_eq!(days_since("2026-01-01T00:60:00Z", Y2026), None);
+}
+
+// --- maintainer_in_comments -----------------------------------------
+
+#[test]
+fn maintainer_in_comments_false_on_empty_slice() {
+    assert!(!maintainer_in_comments(&[]));
+}
+
+#[test]
+fn maintainer_in_comments_true_on_owner() {
+    assert!(maintainer_in_comments(&[comment("OWNER")]));
+}
+
+#[test]
+fn maintainer_in_comments_true_on_member() {
+    assert!(maintainer_in_comments(&[comment("MEMBER")]));
+}
+
+#[test]
+fn maintainer_in_comments_true_on_collaborator() {
+    assert!(maintainer_in_comments(&[comment("COLLABORATOR")]));
+}
+
+#[test]
+fn maintainer_in_comments_false_on_contributor() {
+    // CONTRIBUTOR is anyone with one prior merged PR. It overcounts;
+    // we deliberately exclude it from the maintainer set.
+    assert!(!maintainer_in_comments(&[comment("CONTRIBUTOR")]));
+}
+
+#[test]
+fn maintainer_in_comments_false_on_first_timer_and_none() {
+    assert!(!maintainer_in_comments(&[
+        comment("FIRST_TIMER"),
+        comment("FIRST_TIME_CONTRIBUTOR"),
+        comment("MANNEQUIN"),
+        comment("NONE"),
+    ]));
+}
+
+#[test]
+fn maintainer_in_comments_false_on_unknown_association() {
+    // GitHub adds new association values occasionally. We refuse to
+    // match loosely; an unknown string returns false rather than
+    // accidentally counting as a maintainer touch.
+    assert!(!maintainer_in_comments(&[comment("FUTURE_VALUE")]));
+}
+
+#[test]
+fn maintainer_in_comments_true_when_any_one_matches() {
+    let comments = [
+        comment("NONE"),
+        comment("CONTRIBUTOR"),
+        comment("MEMBER"),
+        comment("NONE"),
+    ];
+    assert!(maintainer_in_comments(&comments));
 }

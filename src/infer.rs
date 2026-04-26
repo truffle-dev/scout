@@ -11,8 +11,10 @@
 //! Time-delta signals (`days_since`) also live here because they're
 //! derivable from a single `IssueMeta` field without extra network.
 //! Signals that need additional API calls (maintainer_touched, no_pr,
-//! contributing_ok) live elsewhere.
+//! contributing_ok) classify their fetched payload here too; only
+//! the network call lives in `fetch`.
 
+use crate::fetch::CommentMeta;
 use crate::fetch::Label;
 
 /// Body contains something that looks like a reproducer: a fenced
@@ -139,6 +141,35 @@ pub fn contributing_looks_ok(body: Option<&str>) -> bool {
         .iter()
         .chain(GATE_MARKERS.iter())
         .any(|m| lower.contains(m))
+}
+
+/// Any comment in the slice was authored by someone the repo treats
+/// as a maintainer. Drives the `maintainer_touched` heuristic: if a
+/// maintainer has already engaged with the issue, the issue is more
+/// likely to land a PR than one that has only seen drive-by reporters.
+///
+/// "Maintainer" here is the GitHub `author_association` set
+/// `OWNER` ∪ `MEMBER` ∪ `COLLABORATOR`. `CONTRIBUTOR` is excluded
+/// deliberately: anyone with one merged PR carries that association
+/// for the rest of time, so it overcounts. The other documented
+/// values (`FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, `MANNEQUIN`,
+/// `NONE`) are clearly not maintainer touches.
+///
+/// Empty slice returns `false`. Unknown association strings (GitHub
+/// adds new ones occasionally) also return `false` rather than
+/// matching loosely.
+pub fn maintainer_in_comments(comments: &[CommentMeta]) -> bool {
+    comments.iter().any(is_maintainer_comment)
+}
+
+/// Whether a single comment counts as a maintainer touch. Public via
+/// `maintainer_in_comments`; the per-comment predicate stays private
+/// because callers only need the slice-level answer.
+fn is_maintainer_comment(c: &CommentMeta) -> bool {
+    matches!(
+        c.author_association.as_str(),
+        "OWNER" | "MEMBER" | "COLLABORATOR"
+    )
 }
 
 /// Days between an ISO-8601 timestamp and a reference unix-seconds

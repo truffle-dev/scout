@@ -4,15 +4,15 @@
 //! suite can exercise it without touching the network.
 //!
 //! The aggregator `factors_from` binds `IssueMeta + RepoMeta +
-//! optional CONTRIBUTING body + now` into a `Factors` value. Two
-//! fields (`no_crosslinked_pr`, `maintainer_touched`) still need
-//! endpoints the fetch layer doesn't expose yet; those default to
+//! optional CONTRIBUTING body + issue comments + now` into a
+//! `Factors` value. One field (`no_crosslinked_pr`) still needs an
+//! endpoint the fetch layer doesn't expose yet; it defaults to
 //! `false` and will be filled in as the fetch layer grows.
 
-use crate::fetch::{IssueMeta, RepoMeta};
+use crate::fetch::{CommentMeta, IssueMeta, RepoMeta};
 use crate::infer::{
     contributing_looks_ok, days_since, has_effort_label, has_non_effort_label, has_reproducer,
-    has_root_cause,
+    has_root_cause, maintainer_in_comments,
 };
 
 /// Observed properties of a single GitHub issue and its parent repo.
@@ -117,7 +117,9 @@ fn decay(days: f64, horizon: f64) -> f64 {
 /// use a single consistent "now" across all issues. `contributing`
 /// is the raw CONTRIBUTING body from [`crate::fetch::contributing_md`];
 /// `None` means the repo has none, which the classifier treats as
-/// contribution-friendly.
+/// contribution-friendly. `comments` is the issue's comment list from
+/// [`crate::fetch::list_issue_comments`]; an empty slice means no
+/// comments, which the classifier treats as no maintainer touch.
 ///
 /// `effort_ok` is true when a positive low-effort label is present
 /// OR when no explicit non-effort label blocks it; the positive label
@@ -126,14 +128,13 @@ fn decay(days: f64, horizon: f64) -> f64 {
 /// as "effectively never updated" rather than "just now."
 ///
 /// Fields left at their `false` defaults: `no_crosslinked_pr` (needs
-/// cross-reference search), `maintainer_touched` (needs comments +
-/// top-committers). A score computed from these defaults
-/// systematically under-rates issues until the fetch layer fills
-/// them in.
+/// cross-reference search). A score computed from this default
+/// systematically under-rates issues until the fetch layer fills it in.
 pub fn factors_from(
     issue: &IssueMeta,
     repo: &RepoMeta,
     contributing: Option<&str>,
+    comments: &[CommentMeta],
     now_unix: i64,
 ) -> Factors {
     let updated_days_ago = days_to_f64(days_since(&issue.updated_at, now_unix));
@@ -146,7 +147,7 @@ pub fn factors_from(
         pushed_days_ago,
         no_crosslinked_pr: false,
         contributing_ok: contributing_looks_ok(contributing),
-        maintainer_touched: false,
+        maintainer_touched: maintainer_in_comments(comments),
     }
 }
 
