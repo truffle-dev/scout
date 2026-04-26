@@ -16,6 +16,7 @@
 
 use crate::fetch::CommentMeta;
 use crate::fetch::Label;
+use crate::fetch::TimelineEvent;
 
 /// Body contains something that looks like a reproducer: a fenced
 /// code block, or an explicit "reproduce" cue.
@@ -170,6 +171,41 @@ fn is_maintainer_comment(c: &CommentMeta) -> bool {
         c.author_association.as_str(),
         "OWNER" | "MEMBER" | "COLLABORATOR"
     )
+}
+
+/// Whether any timeline event cross-references an open pull request.
+/// Drives the `no_crosslinked_pr` factor: when this returns `true`,
+/// someone else's PR already touches the issue and scout should
+/// down-rank the candidate. The factor on the score side is the
+/// negation so the field name reads as "good when true".
+///
+/// A cross-reference event surfaces as `event == "cross-referenced"`.
+/// The source can be either an issue or a PR; only PR sources
+/// (the source's `pull_request` field is present) count for this
+/// signal. Closed-PR cross-references don't matter because a closed
+/// PR doesn't block someone else from picking the issue up.
+///
+/// Empty slice returns `false`. Non-cross-reference events return
+/// `false` regardless of their other fields.
+pub fn crosslinked_open_pr_in_timeline(events: &[TimelineEvent]) -> bool {
+    events.iter().any(is_open_pr_cross_reference)
+}
+
+/// Whether a single timeline event is a cross-reference from an open
+/// PR. Public via `crosslinked_open_pr_in_timeline`; the per-event
+/// predicate stays private because callers only need the slice-level
+/// answer.
+fn is_open_pr_cross_reference(e: &TimelineEvent) -> bool {
+    if e.event != "cross-referenced" {
+        return false;
+    }
+    let Some(source) = &e.source else {
+        return false;
+    };
+    let Some(issue) = &source.issue else {
+        return false;
+    };
+    issue.pull_request.is_some() && issue.state == "open"
 }
 
 /// Days between an ISO-8601 timestamp and a reference unix-seconds

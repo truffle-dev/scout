@@ -14,14 +14,15 @@ pub mod watchlist;
 pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
 pub use fetch::{
     CONTRIBUTING_PATHS, CommentMeta, DEFAULT_PAGE_CAP, FetchError, IssueMeta, Label,
-    PullRequestRef, RepoMeta, UserRef, contributing_md, contributing_md_at, decode_comment_list,
-    decode_issue_list, decode_repo_meta, list_issue_comments, list_issue_comments_at, list_issues,
-    list_issues_at, list_issues_paginated, list_issues_paginated_at, parse_next_link, repo_meta,
-    repo_meta_at,
+    PullRequestRef, RepoMeta, TimelineEvent, TimelineSource, TimelineSourceIssue, UserRef,
+    contributing_md, contributing_md_at, decode_comment_list, decode_issue_list, decode_repo_meta,
+    decode_timeline_list, list_issue_comments, list_issue_comments_at, list_issue_timeline,
+    list_issue_timeline_at, list_issues, list_issues_at, list_issues_paginated,
+    list_issues_paginated_at, parse_next_link, repo_meta, repo_meta_at,
 };
 pub use infer::{
-    contributing_looks_ok, days_since, has_effort_label, has_non_effort_label, has_reproducer,
-    has_root_cause, maintainer_in_comments,
+    contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
+    has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
 };
 pub use init::{
     InitError, InitSummary, WriteOutcome, default_config_path, default_watchlist_path,

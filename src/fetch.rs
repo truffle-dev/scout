@@ -125,6 +125,54 @@ pub struct CommentMeta {
     pub author_association: String,
 }
 
+/// Minimal timeline-event metadata sliced out of a single element of a
+/// `/repos/{owner}/{repo}/issues/{issue_number}/timeline` response.
+/// GitHub's timeline returns dozens of event shapes (commented,
+/// labeled, assigned, referenced, cross-referenced, review_requested,
+/// milestoned, ...); we only care about `cross-referenced` events
+/// because they're how the API surfaces "PR #M references issue #N".
+/// Other events deserialize cleanly because they don't have a `source`
+/// field at all and we made it optional.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TimelineEvent {
+    /// Event type. Documented values include `commented`,
+    /// `cross-referenced`, `labeled`, `assigned`, `referenced`,
+    /// `closed`, `reopened`, etc. The `no_crosslinked_pr` heuristic
+    /// only consumes `cross-referenced`.
+    pub event: String,
+    /// Cross-reference source. Present only on `cross-referenced`
+    /// events; other event types omit this field entirely.
+    #[serde(default)]
+    pub source: Option<TimelineSource>,
+}
+
+/// `source` of a `cross-referenced` timeline event. The wire shape
+/// has a `type: "issue"` discriminator and an `issue` blob; we keep
+/// only the inner blob because the type is always `issue` for
+/// cross-references.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TimelineSource {
+    /// The cross-referencing issue or PR. GitHub returns the full
+    /// issue object even when the source is a PR; the
+    /// `pull_request` field discriminates.
+    #[serde(default)]
+    pub issue: Option<TimelineSourceIssue>,
+}
+
+/// Issue blob inside a cross-reference event's `source`. We slice
+/// out only the fields the `no_crosslinked_pr` classifier needs:
+/// `state` (open/closed) and the optional `pull_request` field
+/// that's present iff the source is a PR.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TimelineSourceIssue {
+    /// `"open"` or `"closed"`.
+    pub state: String,
+    /// Present iff the source is a PR. Same shape as the outer
+    /// `IssueMeta::pull_request`.
+    #[serde(default)]
+    pub pull_request: Option<PullRequestRef>,
+}
+
 /// Parse a `/repos/{owner}/{repo}` JSON body into a `RepoMeta`. Pure:
 /// no IO, no async.
 pub fn decode_repo_meta(json: &str) -> Result<RepoMeta, serde_json::Error> {
@@ -140,6 +188,12 @@ pub fn decode_issue_list(json: &str) -> Result<Vec<IssueMeta>, serde_json::Error
 /// Parse a `/repos/{owner}/{repo}/issues/{issue_number}/comments` JSON
 /// body into a list of `CommentMeta`. Pure: no IO, no async.
 pub fn decode_comment_list(json: &str) -> Result<Vec<CommentMeta>, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
+/// Parse a `/repos/{owner}/{repo}/issues/{issue_number}/timeline` JSON
+/// body into a list of `TimelineEvent`. Pure: no IO, no async.
+pub fn decode_timeline_list(json: &str) -> Result<Vec<TimelineEvent>, serde_json::Error> {
     serde_json::from_str(json)
 }
 
@@ -388,6 +442,47 @@ pub async fn list_issue_comments_at(
 ) -> Result<Vec<CommentMeta>, FetchError> {
     let url =
         format!("{base_url}/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100");
+    get_json(client, &url, token).await
+}
+
+/// Fetch the first page of timeline events on a single issue from
+/// `api.github.com`. Returns up to 100 events. The `no_crosslinked_pr`
+/// heuristic only needs to know whether any cross-referenced event
+/// points at an open PR, so first-page coverage is enough for the bool.
+/// An issue old enough to have more than 100 timeline events typically
+/// has its earliest cross-references on the first page anyway, since
+/// GitHub orders the timeline newest-last.
+pub async fn list_issue_timeline(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    token: Option<&str>,
+) -> Result<Vec<TimelineEvent>, FetchError> {
+    list_issue_timeline_at(
+        "https://api.github.com",
+        client,
+        owner,
+        repo,
+        issue_number,
+        token,
+    )
+    .await
+}
+
+/// Single-page timeline list from an arbitrary GitHub-shaped base URL.
+/// Decoupled from the live `api.github.com` host so wiremock tests can
+/// drive the same code path against a captured payload.
+pub async fn list_issue_timeline_at(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    token: Option<&str>,
+) -> Result<Vec<TimelineEvent>, FetchError> {
+    let url =
+        format!("{base_url}/repos/{owner}/{repo}/issues/{issue_number}/timeline?per_page=100");
     get_json(client, &url, token).await
 }
 

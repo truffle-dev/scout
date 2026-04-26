@@ -4,15 +4,14 @@
 //! suite can exercise it without touching the network.
 //!
 //! The aggregator `factors_from` binds `IssueMeta + RepoMeta +
-//! optional CONTRIBUTING body + issue comments + now` into a
-//! `Factors` value. One field (`no_crosslinked_pr`) still needs an
-//! endpoint the fetch layer doesn't expose yet; it defaults to
-//! `false` and will be filled in as the fetch layer grows.
+//! optional CONTRIBUTING body + issue comments + issue timeline + now`
+//! into a `Factors` value. All eight fields are now wired end-to-end
+//! against fetched payloads.
 
-use crate::fetch::{CommentMeta, IssueMeta, RepoMeta};
+use crate::fetch::{CommentMeta, IssueMeta, RepoMeta, TimelineEvent};
 use crate::infer::{
-    contributing_looks_ok, days_since, has_effort_label, has_non_effort_label, has_reproducer,
-    has_root_cause, maintainer_in_comments,
+    contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
+    has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
 };
 
 /// Observed properties of a single GitHub issue and its parent repo.
@@ -120,21 +119,21 @@ fn decay(days: f64, horizon: f64) -> f64 {
 /// contribution-friendly. `comments` is the issue's comment list from
 /// [`crate::fetch::list_issue_comments`]; an empty slice means no
 /// comments, which the classifier treats as no maintainer touch.
+/// `timeline` is the issue's timeline-events list from
+/// [`crate::fetch::list_issue_timeline`]; an empty slice means no
+/// cross-references exist, so `no_crosslinked_pr` is `true`.
 ///
 /// `effort_ok` is true when a positive low-effort label is present
 /// OR when no explicit non-effort label blocks it; the positive label
 /// wins when both coexist. Days that fail to parse decay to `0.0`
 /// score via a large sentinel, which treats unparseable timestamps
 /// as "effectively never updated" rather than "just now."
-///
-/// Fields left at their `false` defaults: `no_crosslinked_pr` (needs
-/// cross-reference search). A score computed from this default
-/// systematically under-rates issues until the fetch layer fills it in.
 pub fn factors_from(
     issue: &IssueMeta,
     repo: &RepoMeta,
     contributing: Option<&str>,
     comments: &[CommentMeta],
+    timeline: &[TimelineEvent],
     now_unix: i64,
 ) -> Factors {
     let updated_days_ago = days_to_f64(days_since(&issue.updated_at, now_unix));
@@ -145,7 +144,7 @@ pub fn factors_from(
         effort_ok: has_effort_label(&issue.labels) || !has_non_effort_label(&issue.labels),
         updated_days_ago,
         pushed_days_ago,
-        no_crosslinked_pr: false,
+        no_crosslinked_pr: !crosslinked_open_pr_in_timeline(timeline),
         contributing_ok: contributing_looks_ok(contributing),
         maintainer_touched: maintainer_in_comments(comments),
     }

@@ -4,7 +4,8 @@
 //! kinds of false positives the scoring layer is willing to tolerate.
 
 use scout::{
-    CommentMeta, Label, UserRef, contributing_looks_ok, days_since, has_effort_label,
+    CommentMeta, Label, PullRequestRef, TimelineEvent, TimelineSource, TimelineSourceIssue,
+    UserRef, contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
     has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
 };
 
@@ -18,6 +19,27 @@ fn comment(association: &str) -> CommentMeta {
     CommentMeta {
         user: UserRef { login: "u".into() },
         author_association: association.into(),
+    }
+}
+
+fn cross_ref(state: &str, is_pr: bool) -> TimelineEvent {
+    TimelineEvent {
+        event: "cross-referenced".into(),
+        source: Some(TimelineSource {
+            issue: Some(TimelineSourceIssue {
+                state: state.into(),
+                pull_request: is_pr.then(|| PullRequestRef {
+                    html_url: "https://example.invalid/pr".into(),
+                }),
+            }),
+        }),
+    }
+}
+
+fn other_event(name: &str) -> TimelineEvent {
+    TimelineEvent {
+        event: name.into(),
+        source: None,
     }
 }
 
@@ -476,4 +498,70 @@ fn maintainer_in_comments_true_when_any_one_matches() {
         comment("NONE"),
     ];
     assert!(maintainer_in_comments(&comments));
+}
+
+// --- crosslinked_open_pr_in_timeline ---------------------------------
+
+#[test]
+fn crosslinked_open_pr_false_on_empty_slice() {
+    assert!(!crosslinked_open_pr_in_timeline(&[]));
+}
+
+#[test]
+fn crosslinked_open_pr_false_on_only_non_cross_reference_events() {
+    let events = [
+        other_event("commented"),
+        other_event("labeled"),
+        other_event("assigned"),
+        other_event("closed"),
+        other_event("renamed"),
+    ];
+    assert!(!crosslinked_open_pr_in_timeline(&events));
+}
+
+#[test]
+fn crosslinked_open_pr_false_on_issue_to_issue_cross_reference() {
+    // Source has no `pull_request`; it's an issue, not a PR.
+    assert!(!crosslinked_open_pr_in_timeline(&[cross_ref(
+        "open", false
+    )]));
+}
+
+#[test]
+fn crosslinked_open_pr_false_on_only_closed_pr_cross_references() {
+    let events = [cross_ref("closed", true), cross_ref("closed", true)];
+    assert!(!crosslinked_open_pr_in_timeline(&events));
+}
+
+#[test]
+fn crosslinked_open_pr_true_on_open_pr_cross_reference() {
+    assert!(crosslinked_open_pr_in_timeline(&[cross_ref("open", true)]));
+}
+
+#[test]
+fn crosslinked_open_pr_true_when_any_one_event_matches() {
+    let events = [
+        other_event("commented"),
+        cross_ref("closed", true),
+        cross_ref("open", false),
+        cross_ref("open", true),
+        other_event("labeled"),
+    ];
+    assert!(crosslinked_open_pr_in_timeline(&events));
+}
+
+#[test]
+fn crosslinked_open_pr_false_when_source_or_issue_is_missing() {
+    // Defensive: an event tagged `cross-referenced` but with `source`
+    // or `source.issue` missing must not panic and must not count as
+    // a maintainer-blocking signal.
+    let no_source = TimelineEvent {
+        event: "cross-referenced".into(),
+        source: None,
+    };
+    let no_issue = TimelineEvent {
+        event: "cross-referenced".into(),
+        source: Some(TimelineSource { issue: None }),
+    };
+    assert!(!crosslinked_open_pr_in_timeline(&[no_source, no_issue]));
 }
