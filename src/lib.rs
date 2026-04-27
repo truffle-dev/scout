@@ -7,6 +7,7 @@ pub mod config;
 pub mod fetch;
 pub mod infer;
 pub mod init;
+pub mod rank;
 pub mod score;
 pub mod took;
 pub mod watchlist;
@@ -28,6 +29,7 @@ pub use init::{
     InitError, InitSummary, WriteOutcome, default_config_path, default_watchlist_path,
     write_starter_files,
 };
+pub use rank::{RankInput, RankedRow, rank};
 pub use score::{Breakdown, Factors, Weights, factors_from, score};
 pub use took::{
     IssueRef, ParseError, TookError, append_entry, default_ledger_path, format_iso8601_z,
