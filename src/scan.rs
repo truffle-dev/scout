@@ -4,16 +4,18 @@
 //! the per-issue async fetch budget; the modules it consumes stay
 //! pure so they remain unit-testable without it.
 //!
-//! The first slice is `load_watchlist`: read the YAML file from disk
-//! and parse it. Disk-IO errors and parse errors are folded into a
-//! single `ScanError` so the runner above only matches one type.
-//! Future slices will add config and ledger loaders, the per-repo
-//! planner, the rate-limit-aware fetcher, and the renderer.
+//! Two loaders ship today: `load_watchlist` (YAML, hand-rolled parser)
+//! and `load_config` (TOML, serde). Disk-IO errors and parse errors
+//! are folded into a single `ScanError` so the runner above only
+//! matches one type. Future slices will add the ledger reader, the
+//! per-repo planner, the rate-limit-aware fetcher, and the renderer
+//! on the same `ScanError` stack.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::config::{Config, parse as parse_config};
 use crate::watchlist::{Watchlist, WatchlistError, parse as parse_watchlist};
 
 /// Errors surfaced by the scan orchestrator. Each variant tags the
@@ -41,6 +43,17 @@ pub enum ScanError {
         #[source]
         source: WatchlistError,
     },
+
+    /// The file read but the contents did not parse as TOML config.
+    /// The wrapped path lets the renderer prefix the toml-de error
+    /// (which already carries its own line/column span) with the
+    /// file location in one render pass.
+    #[error("config {path}: {source}")]
+    Config {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
 }
 
 /// Read and parse the watchlist at `path`. Returns the parsed
@@ -59,6 +72,28 @@ pub fn load_watchlist(path: &Path) -> Result<Watchlist, ScanError> {
         source,
     })?;
     parse_watchlist(&body).map_err(|source| ScanError::Watchlist {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Read and parse the TOML config at `path`. Returns the parsed
+/// `Config` on success; on failure the path is folded into the
+/// error so the caller can print a single line with both the file
+/// and the underlying cause.
+///
+/// An empty file parses to a fully-defaulted `Config`, matching
+/// the parser-layer contract: every section has a `Default` impl,
+/// so a user who runs `scout init` and never edits the file still
+/// gets the reference weighting. Unknown TOML keys are rejected
+/// at parse time (`#[serde(deny_unknown_fields)]`) so typos
+/// surface instead of silently turning into default values.
+pub fn load_config(path: &Path) -> Result<Config, ScanError> {
+    let body = fs::read_to_string(path).map_err(|source| ScanError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    parse_config(&body).map_err(|source| ScanError::Config {
         path: path.to_path_buf(),
         source,
     })
