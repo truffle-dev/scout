@@ -8,6 +8,7 @@ pub mod fetch;
 pub mod infer;
 pub mod init;
 pub mod rank;
+pub mod render;
 pub mod scan;
 pub mod score;
 pub mod took;
@@ -31,6 +32,7 @@ pub use init::{
     write_starter_files,
 };
 pub use rank::{RankInput, RankedRow, rank};
+pub use render::{json as render_json, table_markdown};
 pub use scan::{
     FetchedIssue, FetchedRepo, LedgerError, LedgerIndex, ScanError, load_config, load_ledger,
     load_watchlist, plan,
