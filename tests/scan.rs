@@ -625,3 +625,118 @@ fn ledger_error_display_includes_path_and_line() {
     assert!(msg.contains("ledger"), "msg = {msg:?}");
     assert!(msg.contains("line 1"), "msg = {msg:?}");
 }
+
+// --- LedgerIndex::in_cooldown ---
+//
+// The cooldown filter is the cooldown semantic the scoring pipeline
+// consumes. Tests below pin the boundary, the unknown-issue case, the
+// `cooldown_days = 0` short-circuit, and the future-dated permissive
+// behavior so a future change has to fight the docs to land.
+
+const DAY_SECS: i64 = 86_400;
+const APR_28_2026: i64 = 1_777_334_400; // 2026-04-28T00:00:00Z
+
+fn ledger_with_one_entry(taken_iso: &str) -> scout::scan::LedgerIndex {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    let line =
+        format!("{{\"repo\":\"truffle-dev/scout\",\"number\":42,\"timestamp\":\"{taken_iso}\"}}\n");
+    fs::write(&path, line).unwrap();
+    load_ledger(&path).unwrap()
+}
+
+/// Issue not in the ledger is never in cooldown. A fresh user with no
+/// `scout took` history has nothing to filter out, regardless of the
+/// configured `cooldown_days`.
+#[test]
+fn in_cooldown_unknown_issue_returns_false() {
+    let idx = scout::scan::LedgerIndex::default();
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 42, 14, APR_28_2026));
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 42, 365, APR_28_2026));
+}
+
+/// `cooldown_days = 0` short-circuits to `false` for every issue,
+/// even one taken five seconds ago. This matches the "no cooldown
+/// configured" reading; without the short-circuit the planner would
+/// have to special-case the zero before calling.
+#[test]
+fn in_cooldown_zero_days_returns_false_even_for_recent_take() {
+    let idx = ledger_with_one_entry("2026-04-27T23:59:55Z");
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 42, 0, APR_28_2026));
+}
+
+/// An issue taken less than `cooldown_days` ago is in cooldown. One
+/// day before the boundary at 14 days is the canonical "yes" case.
+#[test]
+fn in_cooldown_recent_take_under_window_returns_true() {
+    let idx = ledger_with_one_entry("2026-04-27T00:00:00Z");
+    assert!(idx.in_cooldown("truffle-dev", "scout", 42, 14, APR_28_2026));
+}
+
+/// An issue taken exactly `cooldown_days` ago is no longer in
+/// cooldown — the boundary is exclusive on the late side. This
+/// matches the natural reading of "wait N days before taking again":
+/// once N days have elapsed, you can take it.
+#[test]
+fn in_cooldown_exact_boundary_returns_false() {
+    let idx = ledger_with_one_entry("2026-04-14T00:00:00Z");
+    let now = APR_28_2026;
+    let taken = idx.last_taken("truffle-dev", "scout", 42).unwrap();
+    assert_eq!(now - taken, 14 * DAY_SECS, "boundary fixture is exact");
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 42, 14, now));
+}
+
+/// One second before the exact boundary is still in cooldown. Pairs
+/// with the boundary test to anchor the comparison as `<` not `<=`.
+#[test]
+fn in_cooldown_one_second_before_boundary_returns_true() {
+    let idx = ledger_with_one_entry("2026-04-14T00:00:01Z");
+    assert!(idx.in_cooldown("truffle-dev", "scout", 42, 14, APR_28_2026));
+}
+
+/// An issue taken well beyond the cooldown window is not in
+/// cooldown. The complementary "yes" anchor for the recent-take case.
+#[test]
+fn in_cooldown_old_take_past_window_returns_false() {
+    let idx = ledger_with_one_entry("2026-01-01T00:00:00Z");
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 42, 14, APR_28_2026));
+}
+
+/// A future-dated take (clock skew between writer and reader) is
+/// treated as in cooldown rather than erroring. A wrong clock should
+/// only delay re-listing the affected issue, not crash the scan.
+#[test]
+fn in_cooldown_future_dated_take_returns_true() {
+    let idx = ledger_with_one_entry("2026-04-29T00:00:00Z");
+    assert!(idx.in_cooldown("truffle-dev", "scout", 42, 14, APR_28_2026));
+}
+
+/// Cooldown checks key on `(owner, repo, number)`. A different repo
+/// with the same issue number is independent — the `truffle-dev/scout#42`
+/// ledger entry does not put `pnpm/pnpm#42` in cooldown.
+#[test]
+fn in_cooldown_keyed_on_owner_repo_number_tuple() {
+    let idx = ledger_with_one_entry("2026-04-27T00:00:00Z");
+    assert!(idx.in_cooldown("truffle-dev", "scout", 42, 14, APR_28_2026));
+    assert!(!idx.in_cooldown("pnpm", "pnpm", 42, 14, APR_28_2026));
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 99, 14, APR_28_2026));
+}
+
+/// After `append_entry` writes a take, `load_ledger` + `in_cooldown`
+/// agree that the same issue is in cooldown when probed against a
+/// `now` close to the take time. Anchors the read/write contract.
+#[test]
+fn in_cooldown_roundtrips_with_took_writer() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    let issue = IssueRef {
+        owner: "truffle-dev".into(),
+        repo: "scout".into(),
+        number: 7,
+    };
+    append_entry(&path, &issue, "2026-04-27T12:00:00Z").unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert!(idx.in_cooldown("truffle-dev", "scout", 7, 7, APR_28_2026));
+    assert!(!idx.in_cooldown("truffle-dev", "scout", 7, 0, APR_28_2026));
+}

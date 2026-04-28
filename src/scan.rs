@@ -136,6 +136,43 @@ impl LedgerIndex {
             .get(&(owner.to_string(), repo.to_string(), number))
             .copied()
     }
+
+    /// True if the issue is in the cooldown window: it appears in the
+    /// ledger and the most recent take is within `cooldown_days` of
+    /// `now_unix`. The boundary is exclusive on the late side, so an
+    /// issue taken exactly `cooldown_days` ago is no longer in
+    /// cooldown — that matches the natural reading of "wait N days
+    /// before taking again."
+    ///
+    /// Issues not in the ledger return `false`: a fresh user with no
+    /// `scout took` history has nothing in cooldown. `cooldown_days`
+    /// of `0` returns `false` for every issue, which matches "no
+    /// cooldown configured" and lets the planner short-circuit
+    /// without a separate code path.
+    ///
+    /// Future-dated takes (clock skew between the ledger writer and
+    /// the scan caller) are treated as in cooldown rather than
+    /// erroring. This is a permissive call site by design: a wrong
+    /// clock should not crash a scan, only delay re-listing the
+    /// affected issue until the skew is corrected.
+    pub fn in_cooldown(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u32,
+        cooldown_days: u32,
+        now_unix: i64,
+    ) -> bool {
+        if cooldown_days == 0 {
+            return false;
+        }
+        let Some(taken_at) = self.last_taken(owner, repo, number) else {
+            return false;
+        };
+        let elapsed = now_unix - taken_at;
+        let cooldown_secs = (cooldown_days as i64) * 86_400;
+        elapsed < cooldown_secs
+    }
 }
 
 /// Read and parse the watchlist at `path`. Returns the parsed
