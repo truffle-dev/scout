@@ -4,16 +4,16 @@
 //! ledger for cooldown tracking, `explain` shows the score breakdown for
 //! a single issue.
 //!
-//! `init` and `took` are wired. `scan` and `explain` still exit with a
+//! `init`, `scan`, and `took` are wired. `explain` still exits with a
 //! "not yet implemented" message rather than a panic so the binary is
 //! safe to hand to someone who wants to poke at it. The shape is fixed
-//! here so the upcoming fetch-layer commits slot in without renaming
+//! here so the upcoming explain-layer commits slot in without renaming
 //! flags or arguments.
 
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use scout::{init, took};
+use scout::{init, scan, took};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -84,8 +84,15 @@ fn main() -> ExitCode {
             init::run(cli.config.as_deref(), cli.watchlist.as_deref(), force)
         }
         Command::Took { issue } => took::run(cli.ledger.as_deref(), &issue),
-        Command::Scan { .. } | Command::Explain { .. } => {
-            eprintln!("scout: fetch layer not implemented yet");
+        Command::Scan { limit, json } => scan::run(
+            cli.config.as_deref(),
+            cli.watchlist.as_deref(),
+            cli.ledger.as_deref(),
+            limit,
+            json,
+        ),
+        Command::Explain { .. } => {
+            eprintln!("scout: explain not implemented yet");
             ExitCode::from(2)
         }
     }

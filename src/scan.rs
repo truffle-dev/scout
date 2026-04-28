@@ -16,13 +16,19 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
 use crate::config::{Config, Filters, parse as parse_config};
 use crate::fetch::{CommentMeta, IssueMeta, RepoMeta, TimelineEvent};
+use crate::fetcher::fetch_repos;
 use crate::infer::{days_since, parse_iso8601_z};
-use crate::rank::RankInput;
+use crate::init;
+use crate::rank::{RankInput, rank};
+use crate::render;
+use crate::took;
 use crate::watchlist::{Watchlist, WatchlistError, parse as parse_watchlist};
 
 /// Errors surfaced by the scan orchestrator. Each variant tags the
@@ -407,4 +413,125 @@ fn parse_ledger(body: &str) -> Result<LedgerIndex, LedgerError> {
     }
 
     Ok(LedgerIndex { entries })
+}
+
+/// CLI entry point for `scout scan`. Loads config, watchlist, and
+/// ledger; resolves the auth token (config `token_path` first, then
+/// `$GITHUB_TOKEN`); runs the async fetcher inside a fresh tokio
+/// runtime; plans + ranks the fetched payloads; prints the rendered
+/// output. Returns `ExitCode::SUCCESS` on a clean run and
+/// `ExitCode::from(1)` on any error.
+pub fn run(
+    config_override: Option<&str>,
+    watchlist_override: Option<&str>,
+    ledger_override: Option<&str>,
+    limit_override: Option<u32>,
+    json: bool,
+) -> ExitCode {
+    match run_inner(
+        config_override,
+        watchlist_override,
+        ledger_override,
+        limit_override,
+        json,
+    ) {
+        Ok(rendered) => {
+            print!("{rendered}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("scout scan: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+type RunError = Box<dyn std::error::Error + Send + Sync>;
+
+fn run_inner(
+    config_override: Option<&str>,
+    watchlist_override: Option<&str>,
+    ledger_override: Option<&str>,
+    limit_override: Option<u32>,
+    json: bool,
+) -> Result<String, RunError> {
+    let config_path = match config_override {
+        Some(p) => PathBuf::from(p),
+        None => init::default_config_path()?,
+    };
+    let config = load_config(&config_path)?;
+
+    let watchlist_path = match watchlist_override {
+        Some(p) => PathBuf::from(p),
+        None => init::default_watchlist_path()?,
+    };
+    let watchlist = load_watchlist(&watchlist_path)?;
+
+    let ledger_path = match ledger_override {
+        Some(p) => PathBuf::from(p),
+        None => took::default_ledger_path()?,
+    };
+    let ledger = load_ledger(&ledger_path)?;
+
+    let token = resolve_token(config.auth.token_path.as_deref())?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let repos = runtime.block_on(fetch_repos(&watchlist, token.as_deref()))?;
+
+    let now_unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    let inputs = plan(&repos, &config.filters, &ledger, now_unix);
+    let mut rows = rank(&inputs, &config.weights.into(), now_unix);
+    rows.retain(|row| row.breakdown.total >= config.filters.min_score);
+
+    let limit = limit_override
+        .map(|n| n as usize)
+        .unwrap_or(config.output.limit as usize);
+
+    if json {
+        let mut s = render::json(&rows, Some(limit))?;
+        s.push('\n');
+        Ok(s)
+    } else {
+        Ok(render::table_markdown(&rows, Some(limit)))
+    }
+}
+
+/// Resolve the GitHub auth token. Config `token_path` wins if set
+/// (with `~/` tilde expansion against `$HOME`); otherwise fall back
+/// to the `$GITHUB_TOKEN` environment variable. Whitespace is
+/// trimmed off whichever source supplies the value, so a token file
+/// with a trailing newline works.
+fn resolve_token(token_path: Option<&str>) -> Result<Option<String>, RunError> {
+    if let Some(path) = token_path {
+        let expanded = expand_tilde(path);
+        let raw = fs::read_to_string(&expanded).map_err(|source| ScanError::Io {
+            path: expanded,
+            source,
+        })?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(trimmed.to_string()));
+    }
+    if let Ok(env_token) = std::env::var("GITHUB_TOKEN") {
+        let trimmed = env_token.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// Expand a leading `~/` against `$HOME`. Anything else passes
+/// through verbatim. Mirrors the shell convention without pulling
+/// in a dirs crate; the watchlist parser and the ledger writer both
+/// already do their own `$HOME` reads in the same shape.
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    PathBuf::from(path)
 }
