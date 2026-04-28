@@ -80,12 +80,17 @@ impl From<WeightsConfig> for Weights {
 
 /// Filter block. Controls which issues are considered at all.
 /// `exclude_labels` is case-sensitive; GitHub label strings are already
-/// normalized by the fetch layer before comparison.
+/// normalized by the fetch layer before comparison. `cooldown_days`
+/// pairs with the JSONL ledger `scout took` writes: an issue taken
+/// less than that many days ago is filtered out so a user does not
+/// re-pick the same issue during a contribution attempt. `0` disables
+/// the filter (every issue is always available).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Filters {
     pub max_age_days: u32,
     pub min_score: f64,
+    pub cooldown_days: u32,
     pub exclude_labels: Vec<String>,
 }
 
@@ -94,6 +99,7 @@ impl Default for Filters {
         Self {
             max_age_days: 30,
             min_score: 0.50,
+            cooldown_days: 14,
             exclude_labels: vec![
                 "wontfix".to_string(),
                 "invalid".to_string(),

@@ -23,6 +23,10 @@ active_repo        = 0.00
 max_age_days   = 30
 # Issues whose final score falls below this threshold are dropped.
 min_score      = 0.50
+# Issues taken via `scout took` within this many days are filtered
+# out so the same issue is not re-picked during a contribution
+# attempt. Set to 0 to disable.
+cooldown_days  = 14
 # Labels that disqualify an issue regardless of score.
 exclude_labels = ["wontfix", "invalid", "duplicate"]
 

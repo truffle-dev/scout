@@ -20,6 +20,7 @@ fn empty_input_yields_defaults() {
     assert_eq!(cfg.auth.token_path, None);
     assert_eq!(cfg.filters.max_age_days, 30);
     assert!(approx(cfg.filters.min_score, 0.50));
+    assert_eq!(cfg.filters.cooldown_days, 14);
     assert_eq!(
         cfg.filters.exclude_labels,
         vec!["wontfix", "invalid", "duplicate"]
@@ -71,6 +72,7 @@ active_repo        = 0.00
 [filters]
 max_age_days = 30
 min_score    = 0.50
+cooldown_days = 14
 exclude_labels = ["wontfix", "invalid", "duplicate"]
 
 [output]
@@ -83,6 +85,7 @@ limit = 20
         Some("~/.config/scout/token")
     );
     assert_eq!(cfg.filters.max_age_days, 30);
+    assert_eq!(cfg.filters.cooldown_days, 14);
     assert_eq!(cfg.output.limit, 20);
     let w: Weights = cfg.weights.into();
     assert!(approx(w.root_cause, 0.30));
@@ -117,4 +120,32 @@ exclude_labels = []
     assert_eq!(cfg.filters.max_age_days, 7);
     assert!(approx(cfg.filters.min_score, 0.25));
     assert!(cfg.filters.exclude_labels.is_empty());
+    assert_eq!(
+        cfg.filters.cooldown_days, 14,
+        "cooldown_days should keep its default when other filter keys override"
+    );
+}
+
+/// Explicit override of `cooldown_days` round-trips. Pairs with the
+/// zero-disables case below to lock the field's surface as a tunable
+/// integer rather than an enum or boolean.
+#[test]
+fn cooldown_days_override_round_trips() {
+    let src = "[filters]\ncooldown_days = 30\n";
+    let cfg = parse_config(src).expect("parse");
+    assert_eq!(cfg.filters.cooldown_days, 30);
+    assert_eq!(
+        cfg.filters.max_age_days, 30,
+        "max_age_days should keep default"
+    );
+}
+
+/// `cooldown_days = 0` is the documented "no cooldown" knob. The
+/// `LedgerIndex::in_cooldown` predicate already short-circuits on
+/// zero; this test locks that the config surface accepts the value.
+#[test]
+fn cooldown_days_zero_disables_filter() {
+    let src = "[filters]\ncooldown_days = 0\n";
+    let cfg = parse_config(src).expect("parse");
+    assert_eq!(cfg.filters.cooldown_days, 0);
 }
