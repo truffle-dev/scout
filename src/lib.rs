@@ -31,7 +31,10 @@ pub use init::{
     write_starter_files,
 };
 pub use rank::{RankInput, RankedRow, rank};
-pub use scan::{LedgerError, LedgerIndex, ScanError, load_config, load_ledger, load_watchlist};
+pub use scan::{
+    FetchedIssue, FetchedRepo, LedgerError, LedgerIndex, ScanError, load_config, load_ledger,
+    load_watchlist, plan,
+};
 pub use score::{Breakdown, Factors, Weights, factors_from, score};
 pub use took::{
     IssueRef, ParseError, TookError, append_entry, default_ledger_path, format_iso8601_z,

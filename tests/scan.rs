@@ -7,10 +7,13 @@
 use std::fs;
 use std::io::ErrorKind;
 
-use scout::Weights;
-use scout::scan::{LedgerError, ScanError, load_config, load_ledger, load_watchlist};
+use scout::scan::{
+    FetchedIssue, FetchedRepo, LedgerError, ScanError, load_config, load_ledger, load_watchlist,
+    plan,
+};
 use scout::took::{IssueRef, append_entry};
 use scout::watchlist::{WatchEntry, WatchlistError};
+use scout::{Filters, IssueMeta, Label, PullRequestRef, RepoMeta, UserRef, Weights};
 use tempfile::TempDir;
 
 const EPS: f64 = 1e-9;
@@ -739,4 +742,253 @@ fn in_cooldown_roundtrips_with_took_writer() {
     let idx = load_ledger(&path).unwrap();
     assert!(idx.in_cooldown("truffle-dev", "scout", 7, 7, APR_28_2026));
     assert!(!idx.in_cooldown("truffle-dev", "scout", 7, 0, APR_28_2026));
+}
+
+// --- plan ---
+//
+// The planner filters pre-fetched payloads against the user's filters
+// and the cooldown ledger, returning the inputs the ranker consumes.
+// Tests below pin the four filter behaviors (PR-shaped items,
+// excluded labels, max-age, cooldown), the borrow shape that lets
+// `RankInput` reach back into the owning `FetchedRepo`, and the
+// multi-repo case.
+
+fn issue_fixture(number: u64, created_at: &str) -> IssueMeta {
+    IssueMeta {
+        number,
+        title: "test issue".into(),
+        body: None,
+        html_url: format!("https://example.com/issues/{number}"),
+        state: "open".into(),
+        labels: vec![],
+        comments: 0,
+        created_at: created_at.into(),
+        updated_at: created_at.into(),
+        user: UserRef {
+            login: "alice".into(),
+        },
+        pull_request: None,
+    }
+}
+
+fn repo_fixture(full_name: &str) -> RepoMeta {
+    RepoMeta {
+        full_name: full_name.into(),
+        stargazers_count: 0,
+        open_issues_count: 0,
+        pushed_at: "2026-04-28T00:00:00Z".into(),
+        archived: false,
+    }
+}
+
+fn fetched_repo(full_name: &str, issues: Vec<FetchedIssue>) -> FetchedRepo {
+    FetchedRepo {
+        repo: repo_fixture(full_name),
+        contributing: None,
+        issues,
+    }
+}
+
+fn fetched_issue(issue: IssueMeta) -> FetchedIssue {
+    FetchedIssue {
+        issue,
+        comments: vec![],
+        timeline: vec![],
+    }
+}
+
+/// PR-shaped items in the issues endpoint response are dropped. The
+/// ranker is for issues; PRs surface through other tooling.
+#[test]
+fn plan_skips_pull_requests() {
+    let mut pr = issue_fixture(1, "2026-04-28T00:00:00Z");
+    pr.pull_request = Some(PullRequestRef {
+        html_url: "https://example.com/pull/1".into(),
+    });
+    let regular = issue_fixture(2, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![fetched_issue(pr), fetched_issue(regular)],
+    )];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1, "PR is filtered out");
+    assert_eq!(out[0].issue.number, 2, "regular issue passes");
+}
+
+/// An issue carrying any label in `filters.exclude_labels` is dropped.
+/// Default `Filters` excludes `wontfix`, `invalid`, `duplicate`.
+#[test]
+fn plan_skips_issues_with_excluded_label() {
+    let mut wontfix = issue_fixture(1, "2026-04-28T00:00:00Z");
+    wontfix.labels = vec![Label {
+        name: "wontfix".into(),
+    }];
+    let bug = issue_fixture(2, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![fetched_issue(wontfix), fetched_issue(bug)],
+    )];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1, "wontfix-labeled issue is filtered out");
+    assert_eq!(out[0].issue.number, 2);
+}
+
+/// The exclude-label match is case-sensitive, matching the
+/// config-layer doc comment. A repo using `WontFix` instead of
+/// `wontfix` does not get picked up by the default exclude list.
+#[test]
+fn plan_excluded_label_match_is_case_sensitive() {
+    let mut upper = issue_fixture(1, "2026-04-28T00:00:00Z");
+    upper.labels = vec![Label {
+        name: "WontFix".into(),
+    }];
+
+    let repos = vec![fetched_repo("a/b", vec![fetched_issue(upper)])];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "case-mismatched label does not match the case-sensitive exclude list"
+    );
+}
+
+/// An issue created more than `filters.max_age_days` days before
+/// `now_unix` is dropped. The boundary uses `created_at`, not
+/// `updated_at`; recency-of-update is a scoring factor, not a filter.
+#[test]
+fn plan_skips_issues_older_than_max_age() {
+    // 90 days before APR_28_2026
+    let old = issue_fixture(1, "2026-01-28T00:00:00Z");
+    let fresh = issue_fixture(2, "2026-04-20T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "a/b",
+        vec![fetched_issue(old), fetched_issue(fresh)],
+    )];
+    let filters = Filters {
+        max_age_days: 30,
+        ..Filters::default()
+    };
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &filters, &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1, "old issue is filtered out");
+    assert_eq!(out[0].issue.number, 2);
+}
+
+/// `max_age_days = 0` disables the age filter, matching the
+/// `cooldown_days = 0` convention. Without the short-circuit a user
+/// who set the knob to "any age" by writing 0 would silently filter
+/// out every issue ever created.
+#[test]
+fn plan_max_age_zero_disables_age_filter() {
+    let very_old = issue_fixture(1, "2024-01-01T00:00:00Z");
+
+    let repos = vec![fetched_repo("a/b", vec![fetched_issue(very_old)])];
+    let filters = Filters {
+        max_age_days: 0,
+        ..Filters::default()
+    };
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &filters, &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1, "max_age_days=0 disables the age filter");
+}
+
+/// An unparseable `created_at` passes through the age filter rather
+/// than dropping the issue. The scoring layer already treats
+/// unparseable timestamps as "very old" via the recency decay, so
+/// the ranker will down-rank the issue but not lose it entirely.
+#[test]
+fn plan_unparseable_created_at_passes_through_age_filter() {
+    let unparseable = issue_fixture(1, "yesterday");
+
+    let repos = vec![fetched_repo("a/b", vec![fetched_issue(unparseable)])];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "unparseable created_at passes through; scoring will decay it"
+    );
+}
+
+/// An issue listed in the cooldown ledger within the configured
+/// window is dropped. Pairs with `LedgerIndex::in_cooldown` to keep
+/// the planner and the predicate's `<` boundary consistent.
+#[test]
+fn plan_skips_issues_in_cooldown() {
+    let in_cooldown = issue_fixture(42, "2026-04-28T00:00:00Z");
+    let untouched = issue_fixture(99, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![fetched_issue(in_cooldown), fetched_issue(untouched)],
+    )];
+    // Default Filters has cooldown_days = 14; ledger entry is 1 day
+    // ago, well inside the window.
+    let ledger = ledger_with_one_entry("2026-04-27T00:00:00Z");
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1, "issue in cooldown is filtered out");
+    assert_eq!(out[0].issue.number, 99);
+}
+
+/// Multiple repos are walked independently. The same issue number
+/// in two different repos has independent cooldown state, because
+/// the ledger keys on `(owner, repo, number)`. This is the lock
+/// that keeps the `full_name.split_once('/')` path correct.
+#[test]
+fn plan_handles_multiple_repos_with_independent_cooldown() {
+    let scout_42 = issue_fixture(42, "2026-04-28T00:00:00Z");
+    let pnpm_42 = issue_fixture(42, "2026-04-28T00:00:00Z");
+
+    let repos = vec![
+        fetched_repo("truffle-dev/scout", vec![fetched_issue(scout_42)]),
+        fetched_repo("pnpm/pnpm", vec![fetched_issue(pnpm_42)]),
+    ];
+    // The ledger helper writes truffle-dev/scout#42 only.
+    let ledger = ledger_with_one_entry("2026-04-27T00:00:00Z");
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1, "only pnpm/pnpm#42 should pass");
+    assert_eq!(out[0].repo.full_name, "pnpm/pnpm");
+    assert_eq!(out[0].issue.number, 42);
+}
+
+/// An eligible issue produces a `RankInput` whose references reach
+/// back into the owning `FetchedRepo`. This is the lock on the
+/// borrow shape: every field on `RankInput` should reflect the
+/// fetched payload byte-for-byte.
+#[test]
+fn plan_passes_eligible_issue_with_correct_borrow_shape() {
+    let issue = issue_fixture(7, "2026-04-25T00:00:00Z");
+    let repos = vec![FetchedRepo {
+        repo: repo_fixture("truffle-dev/scout"),
+        contributing: Some("# Contributing\n\nWelcome!\n".into()),
+        issues: vec![FetchedIssue {
+            issue,
+            comments: vec![],
+            timeline: vec![],
+        }],
+    }];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(out.len(), 1);
+    let row = &out[0];
+    assert_eq!(row.issue.number, 7);
+    assert_eq!(row.repo.full_name, "truffle-dev/scout");
+    assert_eq!(row.contributing, Some("# Contributing\n\nWelcome!\n"));
+    assert!(row.comments.is_empty());
+    assert!(row.timeline.is_empty());
 }

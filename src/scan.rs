@@ -19,8 +19,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::config::{Config, parse as parse_config};
-use crate::infer::parse_iso8601_z;
+use crate::config::{Config, Filters, parse as parse_config};
+use crate::fetch::{CommentMeta, IssueMeta, RepoMeta, TimelineEvent};
+use crate::infer::{days_since, parse_iso8601_z};
+use crate::rank::RankInput;
 use crate::watchlist::{Watchlist, WatchlistError, parse as parse_watchlist};
 
 /// Errors surfaced by the scan orchestrator. Each variant tags the
@@ -253,6 +255,102 @@ pub fn load_ledger(path: &Path) -> Result<LedgerIndex, ScanError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// One repo's worth of fetched data, owned by the orchestrator and
+/// borrowed into [`crate::rank::RankInput`] values by [`plan`]. The
+/// fields mirror the payloads `fetch::repo_meta`,
+/// `fetch::contributing_md`, and `fetch::list_issues_paginated`
+/// produce; bundling them per-repo keeps the per-issue references
+/// in `RankInput` from straddling multiple owning collections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchedRepo {
+    pub repo: RepoMeta,
+    pub contributing: Option<String>,
+    pub issues: Vec<FetchedIssue>,
+}
+
+/// One issue's worth of fetched data inside a [`FetchedRepo`].
+/// Bundles the payloads `fetch::list_issue_comments` and
+/// `fetch::list_issue_timeline` produce alongside the issue's own
+/// metadata so [`plan`] can build a single
+/// [`crate::rank::RankInput`] from one `FetchedIssue` borrow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchedIssue {
+    pub issue: IssueMeta,
+    pub comments: Vec<CommentMeta>,
+    pub timeline: Vec<TimelineEvent>,
+}
+
+/// Filter pre-fetched payloads against the user's filters and the
+/// cooldown ledger, returning the per-issue inputs ready for the
+/// ranking layer. The returned `RankInput`s borrow from `repos`, so
+/// the caller keeps ownership of the fetch buffers across the call.
+///
+/// Filters applied, in order:
+///
+///   1. PR-shaped items (the issues endpoint returns both): dropped.
+///   2. Excluded labels (`filters.exclude_labels`, case-sensitive
+///      direct match per the config-layer contract): dropped if any
+///      label name matches.
+///   3. Issue age (`filters.max_age_days`, computed from
+///      `issue.created_at` against `now_unix`): dropped if older.
+///      `0` disables the check, matching the cooldown convention.
+///      An unparseable timestamp passes through, since the scoring
+///      layer already treats unparseable timestamps as "very old"
+///      via the recency decay.
+///   4. Cooldown ([`LedgerIndex::in_cooldown`]): dropped if recently
+///      taken. Issue numbers that exceed `u32` are passed through
+///      untouched (the ledger keys on `u32`); the asymmetry is
+///      vanishingly rare in practice and the safe permissive
+///      default is to surface the issue rather than drop it.
+///
+/// `min_score` is not applied here. Score is computed by the ranker
+/// downstream of this function, so filtering on score happens
+/// against the ranker's output, not the planner's input.
+pub fn plan<'a>(
+    repos: &'a [FetchedRepo],
+    filters: &Filters,
+    ledger: &LedgerIndex,
+    now_unix: i64,
+) -> Vec<RankInput<'a>> {
+    let mut out = Vec::new();
+    for fr in repos {
+        let owner_repo = fr.repo.full_name.split_once('/');
+        for fi in &fr.issues {
+            if fi.issue.is_pull_request() {
+                continue;
+            }
+            if fi
+                .issue
+                .labels
+                .iter()
+                .any(|l| filters.exclude_labels.iter().any(|ex| ex == &l.name))
+            {
+                continue;
+            }
+            if filters.max_age_days != 0
+                && let Some(days) = days_since(&fi.issue.created_at, now_unix)
+                && days > filters.max_age_days as i64
+            {
+                continue;
+            }
+            if let Some((owner, repo_name)) = owner_repo
+                && let Ok(num) = u32::try_from(fi.issue.number)
+                && ledger.in_cooldown(owner, repo_name, num, filters.cooldown_days, now_unix)
+            {
+                continue;
+            }
+            out.push(RankInput {
+                issue: &fi.issue,
+                repo: &fr.repo,
+                contributing: fr.contributing.as_deref(),
+                comments: &fi.comments,
+                timeline: &fi.timeline,
+            });
+        }
+    }
+    out
 }
 
 #[derive(Deserialize)]
