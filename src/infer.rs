@@ -247,7 +247,7 @@ fn has_file_line_pointer(body: &str) -> bool {
 /// Date-to-days uses the Fliegel & Van Flandern Julian Day Number
 /// formula; the algorithm is public domain and correct for all
 /// dates in the Gregorian calendar. Unix epoch is JDN 2440588.
-fn parse_iso8601_z(s: &str) -> Option<i64> {
+pub(crate) fn parse_iso8601_z(s: &str) -> Option<i64> {
     let bytes = s.as_bytes();
     if bytes.len() != 20 || bytes[19] != b'Z' {
         return None;

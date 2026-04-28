@@ -8,7 +8,8 @@ use std::fs;
 use std::io::ErrorKind;
 
 use scout::Weights;
-use scout::scan::{ScanError, load_config, load_watchlist};
+use scout::scan::{LedgerError, ScanError, load_config, load_ledger, load_watchlist};
+use scout::took::{IssueRef, append_entry};
 use scout::watchlist::{WatchEntry, WatchlistError};
 use tempfile::TempDir;
 
@@ -325,4 +326,302 @@ fn config_error_display_includes_path() {
     let msg = format!("{err}");
     assert!(msg.contains(path.to_str().unwrap()), "msg = {msg:?}");
     assert!(msg.contains("config"), "msg = {msg:?}");
+}
+
+// --- load_ledger ---
+
+/// A path that does not exist round-trips as an empty ledger. The
+/// cooldown semantic is "no ledger means nothing in cooldown," which
+/// is what a fresh user sees before their first `scout took`. Other
+/// IO errors (permission, EISDIR) still surface.
+#[test]
+fn load_ledger_missing_file_returns_empty_index() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+
+    let idx = load_ledger(&path).unwrap();
+    assert!(idx.is_empty());
+    assert_eq!(idx.len(), 0);
+}
+
+/// An empty file is a valid empty ledger. Same shape as missing-file
+/// so the cooldown layer doesn't have to special-case the two.
+#[test]
+fn load_ledger_empty_file_yields_empty_index() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(&path, "").unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert!(idx.is_empty());
+}
+
+/// A file of only blank lines yields an empty ledger; the parser
+/// tolerates blank lines so a hand-edited file with separator
+/// whitespace doesn't break the read path.
+#[test]
+fn load_ledger_blank_lines_only_yields_empty_index() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(&path, "\n\n   \n\n").unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert!(idx.is_empty());
+}
+
+/// A single valid entry is keyed by `(owner, repo, number)` and
+/// looked up by `last_taken`. Timestamp must round-trip through the
+/// same `infer::parse_iso8601_z` parser that `days_since` uses.
+#[test]
+fn load_ledger_single_entry_roundtrips() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"truffle-dev/scout\",\"number\":42,\"timestamp\":\"2026-04-28T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert_eq!(idx.len(), 1);
+    let secs = idx
+        .last_taken("truffle-dev", "scout", 42)
+        .expect("entry present");
+    // 2026-04-28T00:00:00Z = 20571 days × 86400 sec since the unix
+    // epoch (56 × 365 days + 14 leap days from 1970-2025 + 117 days
+    // from 2026-01-01 to 2026-04-28).
+    assert_eq!(secs, 1_777_334_400);
+}
+
+/// Two distinct issues produce two entries; both are independently
+/// lookupable. Order in the file does not matter.
+#[test]
+fn load_ledger_two_distinct_entries_both_present() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"truffle-dev/scout\",\"number\":1,\"timestamp\":\"2026-04-27T12:00:00Z\"}\n\
+         {\"repo\":\"pnpm/pnpm\",\"number\":11358,\"timestamp\":\"2026-04-28T00:14:00Z\"}\n",
+    )
+    .unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert_eq!(idx.len(), 2);
+    assert!(idx.last_taken("truffle-dev", "scout", 1).is_some());
+    assert!(idx.last_taken("pnpm", "pnpm", 11358).is_some());
+}
+
+/// When the same `(owner, repo, number)` appears on multiple lines,
+/// the most recent timestamp wins. This preserves the tail-merge
+/// invariant: concatenating two ledgers with `cat a b > c` and
+/// reading `c` gives the same view as the latest record per issue.
+#[test]
+fn load_ledger_duplicate_issue_keeps_most_recent_timestamp() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"a/b\",\"number\":7,\"timestamp\":\"2026-04-01T00:00:00Z\"}\n\
+         {\"repo\":\"a/b\",\"number\":7,\"timestamp\":\"2026-04-15T00:00:00Z\"}\n\
+         {\"repo\":\"a/b\",\"number\":7,\"timestamp\":\"2026-04-08T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert_eq!(idx.len(), 1);
+    let latest = idx.last_taken("a", "b", 7).expect("entry present");
+    // 2026-04-15T00:00:00Z is the middle line's timestamp; the
+    // earlier and later-written-but-older lines both lose to it.
+    // 20558 days × 86400 sec since the unix epoch.
+    assert_eq!(latest, 1_776_211_200);
+}
+
+/// `last_taken` returns `None` for an issue not in the ledger. The
+/// cooldown filter relies on this to distinguish "never taken" from
+/// "taken long ago"; both should pass the filter, but for opposite
+/// reasons.
+#[test]
+fn load_ledger_unknown_issue_returns_none() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"a/b\",\"number\":1,\"timestamp\":\"2026-04-28T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert!(idx.last_taken("c", "d", 1).is_none());
+    assert!(idx.last_taken("a", "b", 2).is_none());
+    assert!(idx.last_taken("a", "x", 1).is_none());
+}
+
+/// Malformed JSON on a single line surfaces `LedgerError::Json` with
+/// the 1-based line number. We fail fast rather than silently skip;
+/// hidden corruption is the failure mode this guards against.
+#[test]
+fn load_ledger_malformed_json_returns_json_error_with_line() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"a/b\",\"number\":1,\"timestamp\":\"2026-04-28T00:00:00Z\"}\n\
+         not valid json\n",
+    )
+    .unwrap();
+
+    let err = load_ledger(&path).expect_err("bad json");
+    match err {
+        ScanError::Ledger {
+            path: p,
+            source: LedgerError::Json { line, .. },
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(line, 2, "second line is the offender");
+        }
+        other => panic!("expected ScanError::Ledger with Json, got {other:?}"),
+    }
+}
+
+/// A `repo` field without a `/` surfaces `LedgerError::MalformedRepo`.
+/// Empty owner or repo segments are also caught by the same variant.
+#[test]
+fn load_ledger_repo_without_slash_returns_malformed_repo() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"justname\",\"number\":1,\"timestamp\":\"2026-04-28T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let err = load_ledger(&path).expect_err("malformed repo");
+    match err {
+        ScanError::Ledger {
+            source: LedgerError::MalformedRepo { line, repo },
+            ..
+        } => {
+            assert_eq!(line, 1);
+            assert_eq!(repo, "justname");
+        }
+        other => panic!("expected ScanError::Ledger with MalformedRepo, got {other:?}"),
+    }
+}
+
+/// A `repo` with an empty owner segment is malformed too. The
+/// asymmetric case of owner empty / repo present should not be
+/// silently coerced; the user should see and fix it.
+#[test]
+fn load_ledger_repo_with_empty_segment_returns_malformed_repo() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"/scout\",\"number\":1,\"timestamp\":\"2026-04-28T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let err = load_ledger(&path).expect_err("empty owner");
+    match err {
+        ScanError::Ledger {
+            source: LedgerError::MalformedRepo { line, repo },
+            ..
+        } => {
+            assert_eq!(line, 1);
+            assert_eq!(repo, "/scout");
+        }
+        other => panic!("expected ScanError::Ledger with MalformedRepo, got {other:?}"),
+    }
+}
+
+/// A timestamp outside the narrow `YYYY-MM-DDTHH:MM:SSZ` shape
+/// surfaces `LedgerError::Timestamp`. The parser is intentionally
+/// strict so upstream format drift surfaces rather than hides.
+#[test]
+fn load_ledger_malformed_timestamp_returns_timestamp_error() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(
+        &path,
+        "{\"repo\":\"a/b\",\"number\":1,\"timestamp\":\"yesterday\"}\n",
+    )
+    .unwrap();
+
+    let err = load_ledger(&path).expect_err("bad ts");
+    match err {
+        ScanError::Ledger {
+            source: LedgerError::Timestamp { line, timestamp },
+            ..
+        } => {
+            assert_eq!(line, 1);
+            assert_eq!(timestamp, "yesterday");
+        }
+        other => panic!("expected ScanError::Ledger with Timestamp, got {other:?}"),
+    }
+}
+
+/// Pointing the loader at a directory rather than a file surfaces
+/// `ScanError::Io`, mirroring the watchlist and config loaders.
+#[test]
+fn load_ledger_directory_path_returns_io_error() {
+    let dir = TempDir::new().unwrap();
+
+    let err = load_ledger(dir.path()).expect_err("dir not file");
+    match err {
+        ScanError::Io { path: p, .. } => {
+            assert_eq!(p, dir.path());
+        }
+        other => panic!("expected ScanError::Io, got {other:?}"),
+    }
+}
+
+/// Round-trip: the writer in `took::append_entry` produces lines the
+/// reader in `load_ledger` consumes without a second parser. This is
+/// the lock that keeps writer and reader in step the way the init
+/// templates lock against their loaders.
+#[test]
+fn load_ledger_roundtrip_with_took_writer() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+
+    let issue_a = IssueRef {
+        owner: "truffle-dev".into(),
+        repo: "scout".into(),
+        number: 1,
+    };
+    let issue_b = IssueRef {
+        owner: "pnpm".into(),
+        repo: "pnpm".into(),
+        number: 11358,
+    };
+    append_entry(&path, &issue_a, "2026-04-27T18:00:00Z").unwrap();
+    append_entry(&path, &issue_b, "2026-04-28T00:14:00Z").unwrap();
+    // Re-record issue_a later: the duplicate-dedupe path must keep
+    // the most recent timestamp the writer produced.
+    append_entry(&path, &issue_a, "2026-04-28T01:00:00Z").unwrap();
+
+    let idx = load_ledger(&path).unwrap();
+    assert_eq!(idx.len(), 2, "issue_a's two records collapse");
+    let a_secs = idx.last_taken("truffle-dev", "scout", 1).unwrap();
+    let b_secs = idx.last_taken("pnpm", "pnpm", 11358).unwrap();
+    assert!(
+        a_secs > b_secs,
+        "issue_a's later record beats issue_b's record"
+    );
+}
+
+/// `Display` on `ScanError::Ledger` includes the path and the inner
+/// LedgerError detail so a single-line render in the CLI suffices.
+#[test]
+fn ledger_error_display_includes_path_and_line() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    fs::write(&path, "not valid json\n").unwrap();
+
+    let err = load_ledger(&path).expect_err("bad json");
+    let msg = format!("{err}");
+    assert!(msg.contains(path.to_str().unwrap()), "msg = {msg:?}");
+    assert!(msg.contains("ledger"), "msg = {msg:?}");
+    assert!(msg.contains("line 1"), "msg = {msg:?}");
 }
