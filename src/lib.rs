@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod fetch;
+pub mod fetcher;
 pub mod infer;
 pub mod init;
 pub mod rank;
@@ -23,6 +24,7 @@ pub use fetch::{
     list_issue_timeline_at, list_issues, list_issues_at, list_issues_paginated,
     list_issues_paginated_at, parse_next_link, repo_meta, repo_meta_at,
 };
+pub use fetcher::{fetch_repos, fetch_repos_at};
 pub use infer::{
     contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
     has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
