@@ -3,32 +3,54 @@
 //! consumes: `RepoMeta`, optional CONTRIBUTING body, paginated open
 //! issues, and per-issue comment + timeline pages.
 //!
-//! This is the network-bound layer between the watchlist parse and
-//! the synchronous planner. PR-shaped items are dropped before their
-//! comment + timeline pages would have been fetched, so we don't burn
-//! API quota on payloads the planner is going to filter anyway.
+//! Concurrency is bounded by a shared `Semaphore` whose permit count
+//! is the [`DEFAULT_CONCURRENCY`] knob (default 8). Repos run in
+//! parallel; within each repo, issues run in parallel; within each
+//! issue, comments and timeline run sequentially because the comment
+//! fetch is the cheap fail-fast guard for the timeline fetch (a 503
+//! on comments shouldn't burn another request slot on timeline). The
+//! total in-flight HTTP request count never exceeds the configured
+//! cap, regardless of how many repos and issues are being processed.
 //!
-//! Implementation is serial across repos and serial across issues
-//! within a repo. A future slice replaces both loops with bounded
-//! concurrency once rate-limit handling is in place; until then,
-//! serial is the simpler shape and matches GitHub's secondary-rate-
-//! limit guidance for an unauthenticated personal scan.
+//! PR-shaped items are dropped before their comment + timeline pages
+//! would have been fetched, so we don't burn API quota on payloads
+//! the planner is going to filter anyway.
 //!
 //! Error policy follows the existing fetch layer: any non-2xx status
-//! aborts the walk. Partial fetches would mislead the planner into
-//! under-rating issues whose downstream pages happened to fail, so
-//! the orchestrator returns the first error rather than a partial
-//! `Vec<FetchedRepo>`. The caller decides whether to retry.
+//! aborts the walk by returning the first error reached. Tasks
+//! already spawned but not yet awaited may continue to consume
+//! permits and complete their HTTP calls before the error reaches
+//! the caller; this is intentional, since the cost is at most a few
+//! extra requests on a failed scan and aborting them mid-flight
+//! would leave half-finished request states in flight.
+//!
+//! Order of returned `FetchedRepo`s matches the order of
+//! `watchlist.repos`. Within each repo, `issues` order matches the
+//! order GitHub returned them with PR-shaped items removed.
+
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
 
 use crate::fetch::{
-    DEFAULT_PAGE_CAP, FetchError, contributing_md_at, list_issue_comments_at,
+    DEFAULT_PAGE_CAP, FetchError, IssueMeta, contributing_md_at, list_issue_comments_at,
     list_issue_timeline_at, list_issues_paginated_at, repo_meta_at,
 };
 use crate::scan::{FetchedIssue, FetchedRepo};
 use crate::watchlist::Watchlist;
 
+/// Default cap on the number of HTTP requests in flight at once
+/// across all repos and all issues. Tuned to stay well under
+/// GitHub's authenticated rate ceiling on a typical personal-scan
+/// watchlist; an unauthenticated caller should pass a lower value
+/// via [`fetch_repos_at_with_concurrency`] to avoid the secondary
+/// rate limit.
+pub const DEFAULT_CONCURRENCY: usize = 8;
+
 /// Fetch every payload the planner needs for a [`Watchlist`] from
-/// `api.github.com`. Pagination cap defaults to [`DEFAULT_PAGE_CAP`].
+/// `api.github.com`. Pagination cap defaults to [`DEFAULT_PAGE_CAP`];
+/// concurrency cap defaults to [`DEFAULT_CONCURRENCY`].
 pub async fn fetch_repos(
     watchlist: &Watchlist,
     token: Option<&str>,
@@ -47,8 +69,9 @@ pub async fn fetch_repos(
 /// Same orchestration as [`fetch_repos`], but parameterized on the
 /// base URL, the reqwest client, and the page cap so wiremock-backed
 /// tests and callers that want a custom client (timeouts, proxy,
-/// connection pool) can inject their own. Order of returned
-/// `FetchedRepo`s matches the order of `watchlist.repos`.
+/// connection pool) can inject their own. Concurrency cap defaults
+/// to [`DEFAULT_CONCURRENCY`]. Order of returned `FetchedRepo`s
+/// matches the order of `watchlist.repos`.
 pub async fn fetch_repos_at(
     base_url: &str,
     client: &reqwest::Client,
@@ -56,38 +79,143 @@ pub async fn fetch_repos_at(
     token: Option<&str>,
     max_pages: usize,
 ) -> Result<Vec<FetchedRepo>, FetchError> {
-    let mut out = Vec::with_capacity(watchlist.repos.len());
+    fetch_repos_at_with_concurrency(
+        base_url,
+        client,
+        watchlist,
+        token,
+        max_pages,
+        DEFAULT_CONCURRENCY,
+    )
+    .await
+}
+
+/// Same orchestration as [`fetch_repos_at`], but with an explicit
+/// concurrency cap. `concurrency` is the maximum number of HTTP
+/// requests in flight at once across all repos and all issues; a
+/// value of `0` is clamped to `1`. Order of returned `FetchedRepo`s
+/// matches the order of `watchlist.repos`.
+pub async fn fetch_repos_at_with_concurrency(
+    base_url: &str,
+    client: &reqwest::Client,
+    watchlist: &Watchlist,
+    token: Option<&str>,
+    max_pages: usize,
+    concurrency: usize,
+) -> Result<Vec<FetchedRepo>, FetchError> {
+    let sem = Arc::new(Semaphore::new(concurrency.max(1)));
+
+    let mut repo_tasks: Vec<JoinHandle<Result<FetchedRepo, FetchError>>> =
+        Vec::with_capacity(watchlist.repos.len());
     for entry in &watchlist.repos {
-        let owner = &entry.owner;
-        let repo_name = &entry.repo;
-        let repo = repo_meta_at(base_url, client, owner, repo_name, token).await?;
-        let contributing = contributing_md_at(base_url, client, owner, repo_name, token).await?;
-        let raw_issues =
-            list_issues_paginated_at(base_url, client, owner, repo_name, token, max_pages).await?;
+        let base = base_url.to_string();
+        let client = client.clone();
+        let owner = entry.owner.clone();
+        let repo_name = entry.repo.clone();
+        let token = token.map(|t| t.to_string());
+        let sem = sem.clone();
 
-        let mut issues = Vec::with_capacity(raw_issues.len());
-        for issue in raw_issues {
-            if issue.is_pull_request() {
-                continue;
-            }
-            let comments =
-                list_issue_comments_at(base_url, client, owner, repo_name, issue.number, token)
-                    .await?;
-            let timeline =
-                list_issue_timeline_at(base_url, client, owner, repo_name, issue.number, token)
-                    .await?;
-            issues.push(FetchedIssue {
-                issue,
-                comments,
-                timeline,
-            });
-        }
+        repo_tasks.push(tokio::spawn(async move {
+            fetch_one_repo(
+                &base,
+                &client,
+                &owner,
+                &repo_name,
+                token.as_deref(),
+                max_pages,
+                sem,
+            )
+            .await
+        }));
+    }
 
-        out.push(FetchedRepo {
-            repo,
-            contributing,
-            issues,
-        });
+    let mut out = Vec::with_capacity(repo_tasks.len());
+    for task in repo_tasks {
+        out.push(task.await.expect("repo task panicked")?);
     }
     Ok(out)
+}
+
+async fn fetch_one_repo(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo_name: &str,
+    token: Option<&str>,
+    max_pages: usize,
+    sem: Arc<Semaphore>,
+) -> Result<FetchedRepo, FetchError> {
+    let repo = {
+        let _permit = sem.acquire().await.expect("semaphore closed");
+        repo_meta_at(base_url, client, owner, repo_name, token).await?
+    };
+    let contributing = {
+        let _permit = sem.acquire().await.expect("semaphore closed");
+        contributing_md_at(base_url, client, owner, repo_name, token).await?
+    };
+    let raw_issues = {
+        let _permit = sem.acquire().await.expect("semaphore closed");
+        list_issues_paginated_at(base_url, client, owner, repo_name, token, max_pages).await?
+    };
+
+    let mut issue_tasks: Vec<JoinHandle<Result<FetchedIssue, FetchError>>> = Vec::new();
+    for issue in raw_issues {
+        if issue.is_pull_request() {
+            continue;
+        }
+        let base = base_url.to_string();
+        let client = client.clone();
+        let owner = owner.to_string();
+        let repo_name = repo_name.to_string();
+        let token = token.map(|t| t.to_string());
+        let sem = sem.clone();
+
+        issue_tasks.push(tokio::spawn(async move {
+            fetch_one_issue(
+                &base,
+                &client,
+                &owner,
+                &repo_name,
+                issue,
+                token.as_deref(),
+                sem,
+            )
+            .await
+        }));
+    }
+
+    let mut issues = Vec::with_capacity(issue_tasks.len());
+    for task in issue_tasks {
+        issues.push(task.await.expect("issue task panicked")?);
+    }
+
+    Ok(FetchedRepo {
+        repo,
+        contributing,
+        issues,
+    })
+}
+
+async fn fetch_one_issue(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo_name: &str,
+    issue: IssueMeta,
+    token: Option<&str>,
+    sem: Arc<Semaphore>,
+) -> Result<FetchedIssue, FetchError> {
+    let comments = {
+        let _permit = sem.acquire().await.expect("semaphore closed");
+        list_issue_comments_at(base_url, client, owner, repo_name, issue.number, token).await?
+    };
+    let timeline = {
+        let _permit = sem.acquire().await.expect("semaphore closed");
+        list_issue_timeline_at(base_url, client, owner, repo_name, issue.number, token).await?
+    };
+    Ok(FetchedIssue {
+        issue,
+        comments,
+        timeline,
+    })
 }

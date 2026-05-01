@@ -2,11 +2,12 @@
 //! Wiremock stands in for `api.github.com`; tests verify the repo-then-
 //! issues-then-comments-then-timeline composition, PR pre-filtering
 //! (so we don't burn requests on items the planner is going to drop),
-//! order preservation across multiple repos, and error propagation
-//! at every endpoint family.
+//! order preservation across multiple repos and across issues within
+//! a repo (under bounded-concurrency fan-out), the explicit
+//! concurrency knob, and error propagation at every endpoint family.
 
 use scout::watchlist::{WatchEntry, Watchlist};
-use scout::{FetchError, fetch_repos_at};
+use scout::{FetchError, fetch_repos_at, fetch_repos_at_with_concurrency};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -358,4 +359,180 @@ async fn issue_comments_failure_propagates_without_calling_timeline() {
         .await
         .unwrap_err();
     assert!(matches!(err, FetchError::Status { status: 503, .. }));
+}
+
+#[tokio::test]
+async fn preserves_issue_order_within_repo_under_concurrent_fetch() {
+    // Three non-PR issues fetched concurrently; the orchestrator
+    // collects per-issue tasks in the order issues were returned by
+    // GitHub, so the output preserves that order even when the inner
+    // tasks complete out of order.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REPO_META_JSON))
+        .mount(&server)
+        .await;
+    for cpath in [
+        "CONTRIBUTING.md",
+        ".github/CONTRIBUTING.md",
+        "docs/CONTRIBUTING.md",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/owner/repo/contents/{cpath}")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+    }
+    let three_issues = r#"[
+        {"number": 100, "title": "first", "body": null, "html_url": "x", "state": "open",
+         "labels": [], "comments": 0, "created_at": "2026-04-15T00:00:00Z",
+         "updated_at": "2026-04-20T00:00:00Z", "user": {"login": "u"}},
+        {"number": 200, "title": "second", "body": null, "html_url": "x", "state": "open",
+         "labels": [], "comments": 0, "created_at": "2026-04-15T00:00:00Z",
+         "updated_at": "2026-04-20T00:00:00Z", "user": {"login": "u"}},
+        {"number": 300, "title": "third", "body": null, "html_url": "x", "state": "open",
+         "labels": [], "comments": 0, "created_at": "2026-04-15T00:00:00Z",
+         "updated_at": "2026-04-20T00:00:00Z", "user": {"login": "u"}}
+    ]"#;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(three_issues))
+        .mount(&server)
+        .await;
+    // Stagger response delays so the natural completion order would
+    // be 300 -> 200 -> 100 (reverse of input). The orchestrator must
+    // still collect in input order.
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/100/comments"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("[]")
+                .set_delay(std::time::Duration::from_millis(150)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/100/timeline"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/200/comments"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("[]")
+                .set_delay(std::time::Duration::from_millis(75)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/200/timeline"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/300/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/300/timeline"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let wl = watchlist_with(&[("owner", "repo")]);
+    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(out[0].issues.len(), 3);
+    assert_eq!(out[0].issues[0].issue.number, 100);
+    assert_eq!(out[0].issues[1].issue.number, 200);
+    assert_eq!(out[0].issues[2].issue.number, 300);
+}
+
+#[tokio::test]
+async fn concurrency_one_serializes_request_pattern() {
+    // With concurrency=1 the single semaphore permit forces every
+    // request to wait for the previous one. Behavior of the public
+    // surface is identical to the default; this test wires the
+    // explicit knob path so it can't bit-rot.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REPO_META_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/contents/CONTRIBUTING.md"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("body"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ONE_ISSUE_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/42/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/42/timeline"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let wl = watchlist_with(&[("owner", "repo")]);
+    let out = fetch_repos_at_with_concurrency(&server.uri(), &client, &wl, None, 10, 1)
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].issues.len(), 1);
+    assert_eq!(out[0].issues[0].issue.number, 42);
+}
+
+#[tokio::test]
+async fn concurrency_zero_is_clamped_to_one() {
+    // Sanity: a 0 cap would deadlock the semaphore. The orchestrator
+    // clamps it up to 1 so callers don't have to special-case the
+    // edge of the configurable range.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REPO_META_JSON))
+        .mount(&server)
+        .await;
+    for cpath in [
+        "CONTRIBUTING.md",
+        ".github/CONTRIBUTING.md",
+        "docs/CONTRIBUTING.md",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/owner/repo/contents/{cpath}")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let wl = watchlist_with(&[("owner", "repo")]);
+    let out = fetch_repos_at_with_concurrency(&server.uri(), &client, &wl, None, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 1);
 }
