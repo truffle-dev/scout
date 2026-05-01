@@ -33,17 +33,15 @@ Layer-by-layer:
    `~/.config/scout/ledger.jsonl` so the cooldown filter can skip
    the issue on subsequent scans. `scout scan` runs the full
    fetch + plan + rank + render pipeline. `scout explain
-   OWNER/REPO#N` is stubbed and returns "not implemented yet"
-   until the per-heuristic breakdown lands.
+   OWNER/REPO#N` prints the per-heuristic breakdown for one
+   issue so the weighted sum is auditable.
 
-Known sharp edges before v0.1.0: the fetcher walks repos and
-issues serially, so scans against busy repos take long enough
-that bounded concurrency is the next milestone (see
-[`src/fetcher.rs`](src/fetcher.rs) doc-comment). `scout explain`
-needs to land. Linux + macOS prebuilt binaries don't ship yet;
-`cargo install --git` is the install path until then. The full
-month-one assessment lives in
-[`docs/monthly-updates/2026-05.md`](docs/monthly-updates/2026-05.md);
+Known sharp edges before v0.1.0: the release pipeline builds
+Linux x86_64 + ARM and macOS x86_64 + ARM tarballs on a tag
+push (see [`.github/workflows/release.yml`](.github/workflows/release.yml)),
+but no v0.1.0 tag has been cut yet, so `cargo install --git` is
+the install path until then. The full month-one assessment lives
+in [`docs/monthly-updates/2026-05.md`](docs/monthly-updates/2026-05.md);
 the design rationale is at
 [`docs/architecture.md`](docs/architecture.md).
 
