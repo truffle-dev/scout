@@ -486,6 +486,41 @@ pub async fn list_issue_timeline_at(
     get_json(client, &url, token).await
 }
 
+/// Fetch metadata for a single issue from `api.github.com`. Returns one
+/// `IssueMeta` for the addressed issue. Drives `scout explain`, which
+/// scores one specific issue rather than the listing layer's set.
+pub async fn issue_meta(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    token: Option<&str>,
+) -> Result<IssueMeta, FetchError> {
+    issue_meta_at(
+        "https://api.github.com",
+        client,
+        owner,
+        repo,
+        issue_number,
+        token,
+    )
+    .await
+}
+
+/// Single-issue meta from an arbitrary GitHub-shaped base URL. Decoupled
+/// from `api.github.com` so wiremock tests can drive the same code path.
+pub async fn issue_meta_at(
+    base_url: &str,
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    token: Option<&str>,
+) -> Result<IssueMeta, FetchError> {
+    let url = format!("{base_url}/repos/{owner}/{repo}/issues/{issue_number}");
+    get_json(client, &url, token).await
+}
+
 /// Fetch all open issues for a repo from `api.github.com`, walking
 /// GitHub's `Link: rel="next"` cursor chain up to `DEFAULT_PAGE_CAP`
 /// pages. Stops early if a page has no `next` relation. Returns the

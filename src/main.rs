@@ -3,17 +3,11 @@
 //! and prints ranked issues, `took` appends a contribution to the local
 //! ledger for cooldown tracking, `explain` shows the score breakdown for
 //! a single issue.
-//!
-//! `init`, `scan`, and `took` are wired. `explain` still exits with a
-//! "not yet implemented" message rather than a panic so the binary is
-//! safe to hand to someone who wants to poke at it. The shape is fixed
-//! here so the upcoming explain-layer commits slot in without renaming
-//! flags or arguments.
 
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use scout::{init, scan, took};
+use scout::{explain, init, scan, took};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -91,9 +85,6 @@ fn main() -> ExitCode {
             limit,
             json,
         ),
-        Command::Explain { .. } => {
-            eprintln!("scout: explain not implemented yet");
-            ExitCode::from(2)
-        }
+        Command::Explain { issue } => explain::run(cli.config.as_deref(), &issue),
     }
 }

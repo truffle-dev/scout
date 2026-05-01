@@ -4,6 +4,7 @@
 //! and tunable per-user.
 
 pub mod config;
+pub mod explain;
 pub mod fetch;
 pub mod fetcher;
 pub mod infer;
@@ -20,9 +21,9 @@ pub use fetch::{
     CONTRIBUTING_PATHS, CommentMeta, DEFAULT_PAGE_CAP, FetchError, IssueMeta, Label,
     PullRequestRef, RepoMeta, TimelineEvent, TimelineSource, TimelineSourceIssue, UserRef,
     contributing_md, contributing_md_at, decode_comment_list, decode_issue_list, decode_repo_meta,
-    decode_timeline_list, list_issue_comments, list_issue_comments_at, list_issue_timeline,
-    list_issue_timeline_at, list_issues, list_issues_at, list_issues_paginated,
-    list_issues_paginated_at, parse_next_link, repo_meta, repo_meta_at,
+    decode_timeline_list, issue_meta, issue_meta_at, list_issue_comments, list_issue_comments_at,
+    list_issue_timeline, list_issue_timeline_at, list_issues, list_issues_at,
+    list_issues_paginated, list_issues_paginated_at, parse_next_link, repo_meta, repo_meta_at,
 };
 pub use fetcher::{
     DEFAULT_CONCURRENCY, fetch_repos, fetch_repos_at, fetch_repos_at_with_concurrency,

@@ -446,7 +446,7 @@ pub fn run(
     }
 }
 
-type RunError = Box<dyn std::error::Error + Send + Sync>;
+pub(crate) type RunError = Box<dyn std::error::Error + Send + Sync>;
 
 fn run_inner(
     config_override: Option<&str>,
@@ -501,7 +501,7 @@ fn run_inner(
 /// to the `$GITHUB_TOKEN` environment variable. Whitespace is
 /// trimmed off whichever source supplies the value, so a token file
 /// with a trailing newline works.
-fn resolve_token(token_path: Option<&str>) -> Result<Option<String>, RunError> {
+pub(crate) fn resolve_token(token_path: Option<&str>) -> Result<Option<String>, RunError> {
     if let Some(path) = token_path {
         let expanded = expand_tilde(path);
         let raw = fs::read_to_string(&expanded).map_err(|source| ScanError::Io {

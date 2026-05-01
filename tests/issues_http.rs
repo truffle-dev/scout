@@ -9,7 +9,7 @@
 //! test server stitches its own `uri()` into the next-page URL to keep
 //! the walker pointed at the mock.
 
-use scout::{FetchError, list_issues_at, list_issues_paginated_at};
+use scout::{FetchError, issue_meta_at, list_issues_at, list_issues_paginated_at};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -332,5 +332,92 @@ struct QueryParamMissing {
 impl wiremock::Match for QueryParamMissing {
     fn matches(&self, request: &wiremock::Request) -> bool {
         !request.url.query_pairs().any(|(k, _)| k == self.key)
+    }
+}
+
+// --- single-issue meta -------------------------------------------------
+
+const SINGLE_ISSUE_JSON: &str = r#"{
+    "number": 42,
+    "title": "panic on empty input",
+    "body": "Reproducer at src/lib.rs:120.",
+    "html_url": "https://github.com/rust-lang/cargo/issues/42",
+    "state": "open",
+    "labels": [{"name": "bug"}],
+    "comments": 3,
+    "created_at": "2026-04-25T00:00:00Z",
+    "updated_at": "2026-04-27T00:00:00Z",
+    "user": {"login": "alice"}
+}"#;
+
+#[tokio::test]
+async fn issue_meta_happy_path_decodes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/rust-lang/cargo/issues/42"))
+        .and(header("Accept", "application/vnd.github+json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SINGLE_ISSUE_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let issue = issue_meta_at(&server.uri(), &client, "rust-lang", "cargo", 42, None)
+        .await
+        .unwrap();
+
+    assert_eq!(issue.number, 42);
+    assert_eq!(issue.title, "panic on empty input");
+    assert!(!issue.is_pull_request());
+    assert_eq!(issue.labels.len(), 1);
+    assert_eq!(issue.labels[0].name, "bug");
+}
+
+#[tokio::test]
+async fn issue_meta_bearer_token_is_forwarded() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/rust-lang/cargo/issues/42"))
+        .and(header("Authorization", "Bearer ghp_test"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SINGLE_ISSUE_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let issue = issue_meta_at(
+        &server.uri(),
+        &client,
+        "rust-lang",
+        "cargo",
+        42,
+        Some("ghp_test"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(issue.number, 42);
+}
+
+#[tokio::test]
+async fn issue_meta_not_found_returns_status_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/foo/bar/issues/9999"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let err = issue_meta_at(&server.uri(), &client, "foo", "bar", 9999, None)
+        .await
+        .unwrap_err();
+
+    match err {
+        FetchError::Status { status, url } => {
+            assert_eq!(status, 404);
+            assert!(url.contains("/repos/foo/bar/issues/9999"));
+        }
+        other => panic!("expected Status(404), got {other:?}"),
     }
 }
