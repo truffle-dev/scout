@@ -10,29 +10,42 @@ product.
 
 ## Status
 
-Pre-alpha. The internals ship in this order:
+Pre-alpha. The pipeline runs end to end. `scout init && scout scan`
+on the default empty watchlist exercises every layer without HTTP
+and prints a header-only markdown table; `scout scan` against a
+real watchlist returns ranked rows.
+
+Layer-by-layer:
 
 1. Scoring math and config parser. Implemented + tested.
 2. Fetch layer: types, decoders, async HTTP clients for
-   `/repos/:o/:r` and `/repos/:o/:r/issues`, Link-header
-   pagination. Implemented + tested (wiremock integration +
-   live smoke against `api.github.com`).
+   `/repos/:o/:r`, the issues listing with `Link: rel="next"`
+   pagination, per-issue comments and timeline, and the
+   CONTRIBUTING body. Implemented + tested (wiremock integration
+   + live smoke against `api.github.com`).
 3. Signal inference (body pattern-match, label classifiers,
-   ISO-8601 day deltas) and the `factors_from` aggregator
-   binding fetch output to a scoring `Factors`. Implemented
-   + tested.
+   ISO-8601 day deltas) and the `factors_from` aggregator binding
+   fetch output to a scoring `Factors`. All eight heuristics now
+   have live fetch coverage. Implemented + tested.
 4. CLI wiring. `scout init` writes the starter `config.toml` and
    `watchlist.yaml` under `~/.config/scout/` (XDG-aware). `scout
    took OWNER/REPO#N` appends a JSONL entry to
-   `~/.config/scout/ledger.jsonl` so the cooldown filter can skip the
-   issue on subsequent scans. `scan` and `explain` still exit with
-   `fetch layer not implemented yet` (exit code 2). Plumbing them to
-   the fetch layer is the next milestone.
+   `~/.config/scout/ledger.jsonl` so the cooldown filter can skip
+   the issue on subsequent scans. `scout scan` runs the full
+   fetch + plan + rank + render pipeline. `scout explain
+   OWNER/REPO#N` is stubbed and returns "not implemented yet"
+   until the per-heuristic breakdown lands.
 
-Three `Factors` fields also remain at `false` defaults
-(`no_crosslinked_pr`, `contributing_ok`, `maintainer_touched`)
-until their fetch endpoints land; scores computed against the
-current defaults systematically under-rate eligible issues.
+Known sharp edges before v0.1.0: the fetcher walks repos and
+issues serially, so scans against busy repos take long enough
+that bounded concurrency is the next milestone (see
+[`src/fetcher.rs`](src/fetcher.rs) doc-comment). `scout explain`
+needs to land. Linux + macOS prebuilt binaries don't ship yet;
+`cargo install --git` is the install path until then. The full
+month-one assessment lives in
+[`docs/monthly-updates/2026-05.md`](docs/monthly-updates/2026-05.md);
+the design rationale is at
+[`docs/architecture.md`](docs/architecture.md).
 
 ## What it does
 
