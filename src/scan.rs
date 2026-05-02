@@ -23,7 +23,7 @@ use serde::Deserialize;
 
 use crate::config::{Config, Filters, parse as parse_config};
 use crate::fetch::{CommentMeta, IssueMeta, RepoMeta, TimelineEvent};
-use crate::fetcher::fetch_repos;
+use crate::fetcher::{AgeFilter, fetch_repos};
 use crate::infer::{days_since, parse_iso8601_z};
 use crate::init;
 use crate::rank::{RankInput, rank};
@@ -475,10 +475,14 @@ fn run_inner(
 
     let token = resolve_token(config.auth.token_path.as_deref())?;
 
-    let runtime = tokio::runtime::Runtime::new()?;
-    let repos = runtime.block_on(fetch_repos(&watchlist, token.as_deref()))?;
-
     let now_unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    let age_filter = AgeFilter {
+        max_age_days: config.filters.max_age_days,
+        now_unix,
+    };
+    let runtime = tokio::runtime::Runtime::new()?;
+    let repos = runtime.block_on(fetch_repos(&watchlist, token.as_deref(), age_filter))?;
+
     let inputs = plan(&repos, &config.filters, &ledger, now_unix);
     let mut rows = rank(&inputs, &config.weights.into(), now_unix);
     rows.retain(|row| row.breakdown.total >= config.filters.min_score);

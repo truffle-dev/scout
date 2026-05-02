@@ -7,7 +7,7 @@
 //! concurrency knob, and error propagation at every endpoint family.
 
 use scout::watchlist::{WatchEntry, Watchlist};
-use scout::{FetchError, fetch_repos_at, fetch_repos_at_with_concurrency};
+use scout::{AgeFilter, FetchError, fetch_repos_at, fetch_repos_at_with_concurrency};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -86,9 +86,16 @@ fn watchlist_with(entries: &[(&str, &str)]) -> Watchlist {
 async fn empty_watchlist_makes_no_requests_and_returns_empty() {
     let server = MockServer::start().await;
     let client = reqwest::Client::new();
-    let out = fetch_repos_at(&server.uri(), &client, &Watchlist::default(), None, 10)
-        .await
-        .unwrap();
+    let out = fetch_repos_at(
+        &server.uri(),
+        &client,
+        &Watchlist::default(),
+        None,
+        10,
+        AgeFilter::disabled(),
+    )
+    .await
+    .unwrap();
     assert!(out.is_empty());
 }
 
@@ -128,7 +135,7 @@ async fn single_repo_with_one_issue_returns_full_bundle() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap();
 
@@ -185,7 +192,7 @@ async fn preserves_repo_order_across_multiple_repos() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("first", "one"), ("second", "two"), ("third", "three")]);
-    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap();
 
@@ -250,7 +257,7 @@ async fn pull_requests_skip_per_issue_fetch_calls() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap();
     assert_eq!(out[0].issues.len(), 1);
@@ -284,7 +291,7 @@ async fn missing_contributing_returns_none_and_continues() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap();
     assert_eq!(out.len(), 1);
@@ -310,7 +317,7 @@ async fn repo_meta_failure_propagates_without_calling_downstream_endpoints() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let err = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let err = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap_err();
     assert!(matches!(err, FetchError::Status { status: 500, .. }));
@@ -355,7 +362,7 @@ async fn issue_comments_failure_propagates_without_calling_timeline() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let err = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let err = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap_err();
     assert!(matches!(err, FetchError::Status { status: 503, .. }));
@@ -444,7 +451,7 @@ async fn preserves_issue_order_within_repo_under_concurrent_fetch() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10)
+    let out = fetch_repos_at(&server.uri(), &client, &wl, None, 10, AgeFilter::disabled())
         .await
         .unwrap();
     assert_eq!(out[0].issues.len(), 3);
@@ -493,9 +500,17 @@ async fn concurrency_one_serializes_request_pattern() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let out = fetch_repos_at_with_concurrency(&server.uri(), &client, &wl, None, 10, 1)
-        .await
-        .unwrap();
+    let out = fetch_repos_at_with_concurrency(
+        &server.uri(),
+        &client,
+        &wl,
+        None,
+        10,
+        1,
+        AgeFilter::disabled(),
+    )
+    .await
+    .unwrap();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].issues.len(), 1);
     assert_eq!(out[0].issues[0].issue.number, 42);
@@ -531,8 +546,165 @@ async fn concurrency_zero_is_clamped_to_one() {
 
     let client = reqwest::Client::new();
     let wl = watchlist_with(&[("owner", "repo")]);
-    let out = fetch_repos_at_with_concurrency(&server.uri(), &client, &wl, None, 10, 0)
-        .await
-        .unwrap();
+    let out = fetch_repos_at_with_concurrency(
+        &server.uri(),
+        &client,
+        &wl,
+        None,
+        10,
+        0,
+        AgeFilter::disabled(),
+    )
+    .await
+    .unwrap();
     assert_eq!(out.len(), 1);
+}
+
+#[tokio::test]
+async fn stale_issues_skip_per_issue_fetch_calls() {
+    // Two issues: #1 created within the age window, #2 created
+    // outside it. The orchestrator must fetch the #1 bundle (comments
+    // + timeline) and skip the #2 bundle entirely, so the planner
+    // doesn't pay for payloads it would drop anyway.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REPO_META_JSON))
+        .mount(&server)
+        .await;
+    for cpath in [
+        "CONTRIBUTING.md",
+        ".github/CONTRIBUTING.md",
+        "docs/CONTRIBUTING.md",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/owner/repo/contents/{cpath}")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+    }
+    let two_issues = r#"[
+        {"number": 1, "title": "fresh", "body": null, "html_url": "x", "state": "open",
+         "labels": [], "comments": 0, "created_at": "2026-04-15T00:00:00Z",
+         "updated_at": "2026-04-15T00:00:00Z", "user": {"login": "u"}},
+        {"number": 2, "title": "stale", "body": null, "html_url": "x", "state": "open",
+         "labels": [], "comments": 0, "created_at": "2025-01-01T00:00:00Z",
+         "updated_at": "2025-01-01T00:00:00Z", "user": {"login": "u"}}
+    ]"#;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(two_issues))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/1/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/1/timeline"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/2/comments"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/2/timeline"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // 2026-05-01T00:00:00Z = 1777593600. Age window = 30 days, so
+    // 2026-04-15 (16 days old) passes and 2025-01-01 (485 days old)
+    // is dropped.
+    let now_unix = 1_777_593_600;
+    let client = reqwest::Client::new();
+    let wl = watchlist_with(&[("owner", "repo")]);
+    let out = fetch_repos_at(
+        &server.uri(),
+        &client,
+        &wl,
+        None,
+        10,
+        AgeFilter {
+            max_age_days: 30,
+            now_unix,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out[0].issues.len(), 1);
+    assert_eq!(out[0].issues[0].issue.number, 1);
+}
+
+#[tokio::test]
+async fn max_age_zero_disables_age_filter() {
+    // `0` matches the planner's "no filter" convention: every non-PR
+    // issue still gets its bundle fetched even when the issue is
+    // ancient.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(REPO_META_JSON))
+        .mount(&server)
+        .await;
+    for cpath in [
+        "CONTRIBUTING.md",
+        ".github/CONTRIBUTING.md",
+        "docs/CONTRIBUTING.md",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/owner/repo/contents/{cpath}")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+    }
+    let ancient = r#"[
+        {"number": 99, "title": "ancient", "body": null, "html_url": "x", "state": "open",
+         "labels": [], "comments": 0, "created_at": "2020-01-01T00:00:00Z",
+         "updated_at": "2020-01-01T00:00:00Z", "user": {"login": "u"}}
+    ]"#;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ancient))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/99/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/99/timeline"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let now_unix = 1_777_593_600;
+    let client = reqwest::Client::new();
+    let wl = watchlist_with(&[("owner", "repo")]);
+    let out = fetch_repos_at(
+        &server.uri(),
+        &client,
+        &wl,
+        None,
+        10,
+        AgeFilter {
+            max_age_days: 0,
+            now_unix,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out[0].issues.len(), 1);
+    assert_eq!(out[0].issues[0].issue.number, 99);
 }

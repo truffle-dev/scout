@@ -14,7 +14,11 @@
 //!
 //! PR-shaped items are dropped before their comment + timeline pages
 //! would have been fetched, so we don't burn API quota on payloads
-//! the planner is going to filter anyway.
+//! the planner is going to filter anyway. The same early-skip applies
+//! to issues older than `max_age_days`: the issue listing has the
+//! `created_at` we need, so we can decide before spawning the per-issue
+//! task. `0` disables the age skip, matching the planner's "0 = no
+//! filter" convention.
 //!
 //! Error policy follows the existing fetch layer: any non-2xx status
 //! aborts the walk by returning the first error reached. Tasks
@@ -37,6 +41,7 @@ use crate::fetch::{
     DEFAULT_PAGE_CAP, FetchError, IssueMeta, contributing_md_at, list_issue_comments_at,
     list_issue_timeline_at, list_issues_paginated_at, repo_meta_at,
 };
+use crate::infer::days_since;
 use crate::scan::{FetchedIssue, FetchedRepo};
 use crate::watchlist::Watchlist;
 
@@ -48,12 +53,45 @@ use crate::watchlist::Watchlist;
 /// rate limit.
 pub const DEFAULT_CONCURRENCY: usize = 8;
 
+/// Pre-fetch issue age filter applied at the orchestrator level so
+/// that issues the planner is going to drop don't pay for their
+/// per-issue comments + timeline requests. `max_age_days = 0` matches
+/// the planner's "no filter" convention; when it's 0 the `now_unix`
+/// field is ignored. The filter compares against `IssueMeta.created_at`
+/// for parity with `scan::plan`.
+#[derive(Debug, Clone, Copy)]
+pub struct AgeFilter {
+    /// Maximum issue age in days. `0` disables the filter.
+    pub max_age_days: u32,
+    /// Reference timestamp the age check resolves against. Callers
+    /// take a single wall-clock reading per scan so plan and fetch
+    /// agree on what "today" means.
+    pub now_unix: i64,
+}
+
+impl AgeFilter {
+    /// No-op filter: every non-PR issue gets its bundle fetched.
+    /// Convenient default for callers that don't want age skipping.
+    pub const fn disabled() -> Self {
+        Self {
+            max_age_days: 0,
+            now_unix: 0,
+        }
+    }
+}
+
 /// Fetch every payload the planner needs for a [`Watchlist`] from
 /// `api.github.com`. Pagination cap defaults to [`DEFAULT_PAGE_CAP`];
 /// concurrency cap defaults to [`DEFAULT_CONCURRENCY`].
+///
+/// `age_filter` carries the same `max_age_days` knob the planner applies
+/// in `scan::plan`; passing it here lets the fetcher skip the per-issue
+/// comments + timeline requests for issues the planner is going to drop
+/// anyway. Pass [`AgeFilter::disabled`] to fetch every non-PR issue.
 pub async fn fetch_repos(
     watchlist: &Watchlist,
     token: Option<&str>,
+    age_filter: AgeFilter,
 ) -> Result<Vec<FetchedRepo>, FetchError> {
     let client = reqwest::Client::new();
     fetch_repos_at(
@@ -62,6 +100,7 @@ pub async fn fetch_repos(
         watchlist,
         token,
         DEFAULT_PAGE_CAP,
+        age_filter,
     )
     .await
 }
@@ -78,6 +117,7 @@ pub async fn fetch_repos_at(
     watchlist: &Watchlist,
     token: Option<&str>,
     max_pages: usize,
+    age_filter: AgeFilter,
 ) -> Result<Vec<FetchedRepo>, FetchError> {
     fetch_repos_at_with_concurrency(
         base_url,
@@ -86,6 +126,7 @@ pub async fn fetch_repos_at(
         token,
         max_pages,
         DEFAULT_CONCURRENCY,
+        age_filter,
     )
     .await
 }
@@ -102,6 +143,7 @@ pub async fn fetch_repos_at_with_concurrency(
     token: Option<&str>,
     max_pages: usize,
     concurrency: usize,
+    age_filter: AgeFilter,
 ) -> Result<Vec<FetchedRepo>, FetchError> {
     let sem = Arc::new(Semaphore::new(concurrency.max(1)));
 
@@ -124,6 +166,7 @@ pub async fn fetch_repos_at_with_concurrency(
                 token.as_deref(),
                 max_pages,
                 sem,
+                age_filter,
             )
             .await
         }));
@@ -136,6 +179,7 @@ pub async fn fetch_repos_at_with_concurrency(
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_one_repo(
     base_url: &str,
     client: &reqwest::Client,
@@ -144,6 +188,7 @@ async fn fetch_one_repo(
     token: Option<&str>,
     max_pages: usize,
     sem: Arc<Semaphore>,
+    age_filter: AgeFilter,
 ) -> Result<FetchedRepo, FetchError> {
     let repo = {
         let _permit = sem.acquire().await.expect("semaphore closed");
@@ -161,6 +206,12 @@ async fn fetch_one_repo(
     let mut issue_tasks: Vec<JoinHandle<Result<FetchedIssue, FetchError>>> = Vec::new();
     for issue in raw_issues {
         if issue.is_pull_request() {
+            continue;
+        }
+        if age_filter.max_age_days != 0
+            && let Some(days) = days_since(&issue.created_at, age_filter.now_unix)
+            && days > age_filter.max_age_days as i64
+        {
             continue;
         }
         let base = base_url.to_string();

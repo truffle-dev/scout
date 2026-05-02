@@ -26,7 +26,7 @@ pub use fetch::{
     list_issues_paginated, list_issues_paginated_at, parse_next_link, repo_meta, repo_meta_at,
 };
 pub use fetcher::{
-    DEFAULT_CONCURRENCY, fetch_repos, fetch_repos_at, fetch_repos_at_with_concurrency,
+    AgeFilter, DEFAULT_CONCURRENCY, fetch_repos, fetch_repos_at, fetch_repos_at_with_concurrency,
 };
 pub use infer::{
     contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
