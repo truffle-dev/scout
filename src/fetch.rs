@@ -203,9 +203,23 @@ pub enum FetchError {
     /// Network layer failure: DNS, TLS, timeout, connection reset.
     #[error("http transport failed: {0}")]
     Http(#[from] reqwest::Error),
+    /// GitHub primary rate limit exhausted. Surfaced when a 403
+    /// response carries `x-ratelimit-remaining: 0`. The reset field
+    /// is the value of the `x-ratelimit-reset` header (Unix seconds);
+    /// if the header was missing or unparsable, the field is `0`.
+    /// Distinguished from [`FetchError::Status`] so callers can render
+    /// the wait time instead of the raw 403, which a long scan against
+    /// a many-repo watchlist hits before the per-hour quota resets.
+    #[error(
+        "github primary rate limit exhausted; resets at unix {reset_at_unix_secs} (url: {url})"
+    )]
+    RateLimited {
+        url: String,
+        reset_at_unix_secs: u64,
+    },
     /// Non-2xx status from GitHub. 404 means the repo is private,
-    /// renamed, or doesn't exist; 403 usually means a rate-limit or
-    /// auth issue.
+    /// renamed, or doesn't exist; 403 without rate-limit headers
+    /// usually means an auth or forbidden-resource issue.
     #[error("github returned {status} for {url}")]
     Status { status: u16, url: String },
     /// JSON body did not match the expected shape. Usually means
@@ -213,6 +227,34 @@ pub enum FetchError {
     /// asked for, or the endpoint changed.
     #[error("decode failed: {0}")]
     Decode(#[from] serde_json::Error),
+}
+
+/// Inspect a non-success response and return `Some(FetchError::RateLimited)`
+/// if the response carries the GitHub primary-rate-limit signature
+/// (`status == 403` AND `x-ratelimit-remaining: 0`). Returns `None`
+/// for any other failure shape so the caller can construct a regular
+/// `FetchError::Status`.
+fn rate_limited_error(resp: &reqwest::Response, url: &str) -> Option<FetchError> {
+    if resp.status().as_u16() != 403 {
+        return None;
+    }
+    let headers = resp.headers();
+    let remaining = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())?;
+    if remaining > 0 {
+        return None;
+    }
+    let reset_at_unix_secs = headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    Some(FetchError::RateLimited {
+        url: url.to_string(),
+        reset_at_unix_secs,
+    })
 }
 
 /// User-Agent header sent on every request. GitHub requires one;
@@ -252,6 +294,9 @@ async fn get_json_with_next<T: DeserializeOwned>(
     let resp = req.send().await?;
     let status = resp.status();
     if !status.is_success() {
+        if let Some(err) = rate_limited_error(&resp, url) {
+            return Err(err);
+        }
         return Err(FetchError::Status {
             status: status.as_u16(),
             url: url.to_string(),
@@ -344,6 +389,9 @@ async fn get_raw_or_none(
         return Ok(None);
     }
     if !status.is_success() {
+        if let Some(err) = rate_limited_error(&resp, url) {
+            return Err(err);
+        }
         return Err(FetchError::Status {
             status: status.as_u16(),
             url: url.to_string(),

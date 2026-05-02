@@ -118,11 +118,67 @@ async fn not_found_returns_status_error() {
 }
 
 #[tokio::test]
-async fn rate_limited_returns_status_error() {
+async fn bare_403_without_rate_headers_returns_status_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repos/rust-lang/cargo"))
         .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let err = repo_meta_at(&server.uri(), &client, "rust-lang", "cargo", None)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, FetchError::Status { status: 403, .. }));
+}
+
+#[tokio::test]
+async fn primary_rate_limit_403_returns_rate_limited() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/rust-lang/cargo"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("x-ratelimit-limit", "5000")
+                .insert_header("x-ratelimit-remaining", "0")
+                .insert_header("x-ratelimit-used", "5004")
+                .insert_header("x-ratelimit-reset", "1777690825"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let err = repo_meta_at(&server.uri(), &client, "rust-lang", "cargo", None)
+        .await
+        .unwrap_err();
+
+    match err {
+        FetchError::RateLimited {
+            url,
+            reset_at_unix_secs,
+        } => {
+            assert!(url.ends_with("/repos/rust-lang/cargo"));
+            assert_eq!(reset_at_unix_secs, 1777690825);
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn forbidden_403_with_remaining_quota_returns_status_error() {
+    // 403 paired with `x-ratelimit-remaining > 0` is GitHub saying
+    // "this endpoint is forbidden for your token", not "you're rate-
+    // limited". Caller behavior should differ, so the variant differs.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/rust-lang/cargo"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("x-ratelimit-limit", "5000")
+                .insert_header("x-ratelimit-remaining", "4831"),
+        )
         .mount(&server)
         .await;
 
