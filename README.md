@@ -84,6 +84,45 @@ scout explain OWNER/REPO#N
 
 Global flags: `--config PATH`, `--watchlist PATH`, `--ledger PATH`.
 
+## Example output
+
+`scout scan` returns a ranked markdown table. Shape:
+
+| score | issue | title |
+| ----: | :---- | :---- |
+| 0.85 | [clap-rs/clap#6353](https://github.com/clap-rs/clap/issues/6353) | `ValueCompleter::complete_at` for indexed multi-value completion |
+| 0.80 | [atuinsh/atuin#3442](https://github.com/atuinsh/atuin/issues/3442) | Wedged daemon hangs the shell on history RPCs |
+| 0.40 | [charmbracelet/gum#1068](https://github.com/charmbracelet/gum/issues/1068) | docs: log section typo |
+
+Scores depend on each issue's current state and your config weights, so
+rerunning `scout scan` reflects updates and any tuning in `config.toml`.
+
+`scout explain clap-rs/clap#6353` shows the per-heuristic breakdown
+behind a single score:
+
+```
+# `ValueCompleter::complete_at` for indexed multi-value completion
+
+https://github.com/clap-rs/clap/issues/6353
+
+**Score**: 0.85
+
+| factor             | weighted |
+| :----------------- | -------: |
+| root_cause         |    0.300 |
+| no_pr              |    0.200 |
+| recent             |    0.150 |
+| contributing_ok    |    0.150 |
+| reproducer         |    0.000 |
+| effort_ok          |    0.100 |
+| maintainer_touched |    0.050 |
+| active_repo        |    0.000 |
+```
+
+`scout scan --json` returns the same ranked rows as a single-line JSON
+array (one element per row, with `score` and `parts` for the per-factor
+contributions) so downstream tools like `jq` can re-rank or annotate.
+
 ## How it ranks
 
 Eight heuristics, weight in `[0, 1]`, summed per issue, capped at
