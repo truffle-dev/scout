@@ -121,20 +121,40 @@ fn default_ledger_dir() -> Result<PathBuf, TookError> {
     Ok(PathBuf::from(home).join(".config").join("scout"))
 }
 
+/// Default `event` value for legacy ledger lines that pre-date the
+/// field. The first ledger format wrote only `{repo, number, timestamp}`;
+/// reading those entries today should treat them as `took`, since that
+/// was the only writer at the time.
+pub const DEFAULT_EVENT: &str = "took";
+
 #[derive(Debug, Serialize)]
 struct LedgerEntry<'a> {
     repo: String,
     number: u32,
     timestamp: &'a str,
+    event: &'a str,
 }
 
-/// Append a JSONL line for `issue` at `timestamp_iso` to `ledger_path`.
-/// Creates parent directories and the file itself as needed; never
-/// truncates. The line shape is `{"repo":"o/r","number":N,"timestamp":"…Z"}\n`.
+/// Append a JSONL line tagged `event = "took"` for `issue` at
+/// `timestamp_iso` to `ledger_path`. Thin wrapper around
+/// [`append_entry_with_event`] for the most common writer.
 pub fn append_entry(
     ledger_path: &Path,
     issue: &IssueRef,
     timestamp_iso: &str,
+) -> Result<(), TookError> {
+    append_entry_with_event(ledger_path, issue, timestamp_iso, DEFAULT_EVENT)
+}
+
+/// Append a JSONL line for `issue` at `timestamp_iso` to `ledger_path`,
+/// tagging it with `event` (e.g. `"took"`, `"dropped"`). Creates parent
+/// directories and the file itself as needed; never truncates. The line
+/// shape is `{"repo":"o/r","number":N,"timestamp":"…Z","event":"…"}\n`.
+pub fn append_entry_with_event(
+    ledger_path: &Path,
+    issue: &IssueRef,
+    timestamp_iso: &str,
+    event: &str,
 ) -> Result<(), TookError> {
     if let Some(parent) = ledger_path.parent()
         && !parent.as_os_str().is_empty()
@@ -149,6 +169,7 @@ pub fn append_entry(
         repo: format!("{}/{}", issue.owner, issue.repo),
         number: issue.number,
         timestamp: timestamp_iso,
+        event,
     };
     let mut line = serde_json::to_string(&entry).expect("LedgerEntry serializes");
     line.push('\n');

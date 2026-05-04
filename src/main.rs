@@ -7,7 +7,7 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use scout::{explain, init, scan, took};
+use scout::{dropped, explain, init, scan, took};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -63,6 +63,15 @@ enum Command {
         issue: String,
     },
 
+    /// Record an investigated-and-abandoned engagement in the local
+    /// ledger. Same cooldown effect as `took`; different event tag so
+    /// the two outcomes are distinguishable in the file.
+    Dropped {
+        /// Issue reference in `OWNER/REPO#N` form.
+        #[arg(value_name = "OWNER/REPO#N")]
+        issue: String,
+    },
+
     /// Show the per-heuristic score breakdown for a single issue.
     Explain {
         /// Issue reference in `OWNER/REPO#N` form.
@@ -78,6 +87,7 @@ fn main() -> ExitCode {
             init::run(cli.config.as_deref(), cli.watchlist.as_deref(), force)
         }
         Command::Took { issue } => took::run(cli.ledger.as_deref(), &issue),
+        Command::Dropped { issue } => dropped::run(cli.ledger.as_deref(), &issue),
         Command::Scan { limit, json } => scan::run(
             cli.config.as_deref(),
             cli.watchlist.as_deref(),

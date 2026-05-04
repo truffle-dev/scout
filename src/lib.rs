@@ -4,6 +4,7 @@
 //! and tunable per-user.
 
 pub mod config;
+pub mod dropped;
 pub mod explain;
 pub mod fetch;
 pub mod fetcher;
@@ -44,7 +45,7 @@ pub use scan::{
 };
 pub use score::{Breakdown, Factors, Weights, factors_from, score};
 pub use took::{
-    IssueRef, ParseError, TookError, append_entry, default_ledger_path, format_iso8601_z,
-    now_iso8601_z, parse_issue_ref,
+    DEFAULT_EVENT, IssueRef, ParseError, TookError, append_entry, append_entry_with_event,
+    default_ledger_path, format_iso8601_z, now_iso8601_z, parse_issue_ref,
 };
 pub use watchlist::{WatchEntry, Watchlist, WatchlistError, parse as parse_watchlist};

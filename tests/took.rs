@@ -99,7 +99,7 @@ fn append_creates_file_and_parent_dirs() {
     let body = std::fs::read_to_string(&ledger).unwrap();
     assert_eq!(
         body,
-        "{\"repo\":\"truffle-dev/scout\",\"number\":7,\"timestamp\":\"2026-04-25T07:30:00Z\"}\n"
+        "{\"repo\":\"truffle-dev/scout\",\"number\":7,\"timestamp\":\"2026-04-25T07:30:00Z\",\"event\":\"took\"}\n"
     );
 }
 
