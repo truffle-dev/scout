@@ -29,7 +29,7 @@ use crate::init;
 use crate::rank::{RankInput, rank};
 use crate::render;
 use crate::took;
-use crate::watchlist::{Watchlist, WatchlistError, parse as parse_watchlist};
+use crate::watchlist::{WatchEntry, Watchlist, WatchlistError, parse as parse_watchlist};
 
 /// Errors surfaced by the scan orchestrator. Each variant tags the
 /// path that produced the error so messages are actionable without
@@ -288,6 +288,47 @@ pub struct FetchedIssue {
     pub timeline: Vec<TimelineEvent>,
 }
 
+/// Drop watchlist entries that match any pattern in `excludes`.
+/// Two pattern shapes are supported:
+///
+///   * `owner/repo` matches that one entry exactly.
+///   * `owner/*` matches every entry under that owner (org wildcard).
+///
+/// Empty excludes round-trip the watchlist unchanged. Patterns that
+/// do not parse into either shape (no slash, more than one slash, an
+/// empty owner segment) match nothing rather than erroring; a stray
+/// pattern in a user's config is a config bug, not a scan-failure
+/// reason. Order of the surviving entries matches the input order.
+///
+/// The orchestrator calls this between `load_watchlist` and
+/// `fetch_repos` so excluded repos never cost HTTP budget. Useful
+/// for venue-blocked repos (CLA-gated, no-AI policy, maintainer
+/// signal) the user wants to keep in the watchlist file as a record
+/// but not actively scan.
+pub fn apply_exclude_repos(watchlist: Watchlist, excludes: &[String]) -> Watchlist {
+    if excludes.is_empty() {
+        return watchlist;
+    }
+    let repos = watchlist
+        .repos
+        .into_iter()
+        .filter(|entry| !excludes.iter().any(|pat| repo_matches(entry, pat)))
+        .collect();
+    Watchlist { repos }
+}
+
+/// True if `entry` matches the exclude `pattern`. See
+/// [`apply_exclude_repos`] for the supported pattern shapes.
+fn repo_matches(entry: &WatchEntry, pattern: &str) -> bool {
+    if let Some(owner) = pattern.strip_suffix("/*") {
+        return !owner.is_empty() && entry.owner == owner;
+    }
+    match pattern.split_once('/') {
+        Some((owner, repo)) => entry.owner == owner && entry.repo == repo,
+        None => false,
+    }
+}
+
 /// Filter pre-fetched payloads against the user's filters and the
 /// cooldown ledger, returning the per-issue inputs ready for the
 /// ranking layer. The returned `RankInput`s borrow from `repos`, so
@@ -310,6 +351,10 @@ pub struct FetchedIssue {
 ///      untouched (the ledger keys on `u32`); the asymmetry is
 ///      vanishingly rare in practice and the safe permissive
 ///      default is to surface the issue rather than drop it.
+///
+/// `filters.exclude_repos` is enforced upstream of `plan` by the
+/// orchestrator (see [`apply_exclude_repos`]) so excluded repos
+/// never reach the fetcher.
 ///
 /// `min_score` is not applied here. Score is computed by the ranker
 /// downstream of this function, so filtering on score happens
@@ -466,6 +511,7 @@ fn run_inner(
         None => init::default_watchlist_path()?,
     };
     let watchlist = load_watchlist(&watchlist_path)?;
+    let watchlist = apply_exclude_repos(watchlist, &config.filters.exclude_repos);
 
     let ledger_path = match ledger_override {
         Some(p) => PathBuf::from(p),

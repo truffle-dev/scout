@@ -84,7 +84,11 @@ impl From<WeightsConfig> for Weights {
 /// pairs with the JSONL ledger `scout took` writes: an issue taken
 /// less than that many days ago is filtered out so a user does not
 /// re-pick the same issue during a contribution attempt. `0` disables
-/// the filter (every issue is always available).
+/// the filter (every issue is always available). `exclude_repos`
+/// drops watchlist entries before any fetch happens, so a venue-blocked
+/// repo (CLA-gated, no-AI policy, maintainer signal) never costs
+/// HTTP budget. Each entry is `owner/repo` for an exact match or
+/// `owner/*` for the entire org.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Filters {
@@ -92,6 +96,7 @@ pub struct Filters {
     pub min_score: f64,
     pub cooldown_days: u32,
     pub exclude_labels: Vec<String>,
+    pub exclude_repos: Vec<String>,
 }
 
 impl Default for Filters {
@@ -105,6 +110,7 @@ impl Default for Filters {
                 "invalid".to_string(),
                 "duplicate".to_string(),
             ],
+            exclude_repos: Vec::new(),
         }
     }
 }

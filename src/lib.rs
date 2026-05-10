@@ -40,8 +40,8 @@ pub use init::{
 pub use rank::{RankInput, RankedRow, rank};
 pub use render::{json as render_json, table_markdown};
 pub use scan::{
-    FetchedIssue, FetchedRepo, LedgerError, LedgerIndex, ScanError, load_config, load_ledger,
-    load_watchlist, plan,
+    FetchedIssue, FetchedRepo, LedgerError, LedgerIndex, ScanError, apply_exclude_repos,
+    load_config, load_ledger, load_watchlist, plan,
 };
 pub use score::{Breakdown, Factors, Weights, factors_from, score};
 pub use took::{

@@ -63,11 +63,13 @@ ledger.jsonl ───┘
   drops issues that were touched within the configured window so
   the same issue doesn't keep re-surfacing during a contribution
   attempt.
-- **fetcher**: async layer (reqwest + tokio). Walks the watchlist,
-  pulls `RepoMeta`, optional `CONTRIBUTING.md`, paginated open
-  issues, and per-issue comments + timeline. Pre-filters
-  PR-shaped issue rows before their per-issue pages would be
-  fetched, since the planner is going to drop them anyway.
+- **fetcher**: async layer (reqwest + tokio). Walks the watchlist
+  (post `filters.exclude_repos`, which the orchestrator applies
+  upstream so venue-blocked repos never cost HTTP), pulls
+  `RepoMeta`, optional `CONTRIBUTING.md`, paginated open issues,
+  and per-issue comments + timeline. Pre-filters PR-shaped issue
+  rows before their per-issue pages would be fetched, since the
+  planner is going to drop them anyway.
 - **planner** (sync): folds the fetched payloads, the ledger, and
   the config filters into a `Vec<RankInput>` ready for scoring.
   Drops items that fail age, score-floor, label, or cooldown

@@ -29,6 +29,12 @@ min_score      = 0.50
 cooldown_days  = 14
 # Labels that disqualify an issue regardless of score.
 exclude_labels = ["wontfix", "invalid", "duplicate"]
+# Repos to skip before any fetch. Useful for venue-blocked repos
+# (CLA-gated, no-AI policy, maintainer signal) that you want to
+# leave in the watchlist as a record without paying HTTP for them.
+# Each entry is `owner/repo` for an exact match or `owner/*` for
+# the entire org.
+exclude_repos = []
 
 [output]
 # One of "auto", "always", "never". Validated at the CLI layer.

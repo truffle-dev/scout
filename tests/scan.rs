@@ -8,11 +8,11 @@ use std::fs;
 use std::io::ErrorKind;
 
 use scout::scan::{
-    FetchedIssue, FetchedRepo, LedgerError, ScanError, load_config, load_ledger, load_watchlist,
-    plan,
+    FetchedIssue, FetchedRepo, LedgerError, ScanError, apply_exclude_repos, load_config,
+    load_ledger, load_watchlist, plan,
 };
 use scout::took::{IssueRef, append_entry};
-use scout::watchlist::{WatchEntry, WatchlistError};
+use scout::watchlist::{WatchEntry, Watchlist, WatchlistError};
 use scout::{Filters, IssueMeta, Label, PullRequestRef, RepoMeta, UserRef, Weights};
 use tempfile::TempDir;
 
@@ -991,4 +991,152 @@ fn plan_passes_eligible_issue_with_correct_borrow_shape() {
     assert_eq!(row.contributing, Some("# Contributing\n\nWelcome!\n"));
     assert!(row.comments.is_empty());
     assert!(row.timeline.is_empty());
+}
+
+fn watchlist_of(slugs: &[&str]) -> Watchlist {
+    Watchlist {
+        repos: slugs
+            .iter()
+            .map(|s| {
+                let (owner, repo) = s.split_once('/').expect("test fixture slug");
+                WatchEntry {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// An empty exclude list round-trips the watchlist unchanged. This
+/// is the common path for the majority of users who do not have
+/// venue-blocked repos.
+#[test]
+fn apply_exclude_repos_empty_list_is_noop() {
+    let wl = watchlist_of(&["truffle-dev/scout", "tokio-rs/tokio"]);
+    let out = apply_exclude_repos(wl.clone(), &[]);
+    assert_eq!(out, wl);
+}
+
+/// An exact `owner/repo` pattern drops the matching entry and only
+/// that entry; the sibling repo under the same owner is preserved.
+#[test]
+fn apply_exclude_repos_exact_match_drops_one() {
+    let wl = watchlist_of(&["truffle-dev/scout", "atuinsh/atuin", "atuinsh/dotfiles"]);
+    let excludes = vec!["atuinsh/atuin".to_string()];
+    let out = apply_exclude_repos(wl, &excludes);
+    assert_eq!(
+        out.repos,
+        vec![
+            WatchEntry {
+                owner: "truffle-dev".into(),
+                repo: "scout".into(),
+            },
+            WatchEntry {
+                owner: "atuinsh".into(),
+                repo: "dotfiles".into(),
+            },
+        ]
+    );
+}
+
+/// An `owner/*` pattern drops every entry under that owner, keeping
+/// every entry under other owners. This is the venue-block-the-org
+/// shape for cases like astral-sh's blanket AI policy.
+#[test]
+fn apply_exclude_repos_org_wildcard_drops_all_under_owner() {
+    let wl = watchlist_of(&[
+        "truffle-dev/scout",
+        "astral-sh/uv",
+        "astral-sh/ruff",
+        "tokio-rs/tokio",
+    ]);
+    let excludes = vec!["astral-sh/*".to_string()];
+    let out = apply_exclude_repos(wl, &excludes);
+    assert_eq!(
+        out.repos,
+        vec![
+            WatchEntry {
+                owner: "truffle-dev".into(),
+                repo: "scout".into(),
+            },
+            WatchEntry {
+                owner: "tokio-rs".into(),
+                repo: "tokio".into(),
+            },
+        ]
+    );
+}
+
+/// Mixed patterns combine: an exact match and an org wildcard both
+/// apply, in source order from the watchlist. Used to lock that the
+/// per-pattern check is an `any`, not a chain.
+#[test]
+fn apply_exclude_repos_combines_exact_and_wildcard() {
+    let wl = watchlist_of(&[
+        "truffle-dev/scout",
+        "atuinsh/atuin",
+        "astral-sh/uv",
+        "astral-sh/ruff",
+        "tokio-rs/tokio",
+    ]);
+    let excludes = vec!["atuinsh/atuin".to_string(), "astral-sh/*".to_string()];
+    let out = apply_exclude_repos(wl, &excludes);
+    assert_eq!(
+        out.repos,
+        vec![
+            WatchEntry {
+                owner: "truffle-dev".into(),
+                repo: "scout".into(),
+            },
+            WatchEntry {
+                owner: "tokio-rs".into(),
+                repo: "tokio".into(),
+            },
+        ]
+    );
+}
+
+/// A pattern that matches nothing is a no-op. A user whose excludes
+/// list still references a repo they removed from the watchlist
+/// last week should not get a failure or a surprise drop.
+#[test]
+fn apply_exclude_repos_no_match_preserves_input() {
+    let wl = watchlist_of(&["truffle-dev/scout", "tokio-rs/tokio"]);
+    let excludes = vec!["someone-else/gone".to_string(), "ghost-org/*".to_string()];
+    let out = apply_exclude_repos(wl.clone(), &excludes);
+    assert_eq!(out, wl);
+}
+
+/// Malformed patterns (no slash, more than one slash, empty owner
+/// before `/*`) match nothing rather than erroring. The config
+/// schema is `Vec<String>` with no shape validation, so junk values
+/// are a config bug, not a scan-failure reason.
+#[test]
+fn apply_exclude_repos_malformed_patterns_are_inert() {
+    let wl = watchlist_of(&["truffle-dev/scout", "tokio-rs/tokio"]);
+    let excludes = vec![
+        "no-slash".to_string(),
+        "too/many/slashes".to_string(),
+        "/*".to_string(),
+    ];
+    let out = apply_exclude_repos(wl.clone(), &excludes);
+    assert_eq!(out, wl);
+}
+
+/// The wildcard is exactly `owner/*`; a partial-match string like
+/// `astral-` should not pull in `astral-sh`. The match is on the
+/// full owner segment, not a prefix.
+#[test]
+fn apply_exclude_repos_wildcard_owner_is_exact_segment() {
+    let wl = watchlist_of(&["astral-sh/uv", "astralis/main"]);
+    let excludes = vec!["astral-sh/*".to_string()];
+    let out = apply_exclude_repos(wl, &excludes);
+    assert_eq!(
+        out.repos,
+        vec![WatchEntry {
+            owner: "astralis".into(),
+            repo: "main".into(),
+        }]
+    );
 }

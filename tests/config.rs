@@ -149,3 +149,32 @@ fn cooldown_days_zero_disables_filter() {
     let cfg = parse_config(src).expect("parse");
     assert_eq!(cfg.filters.cooldown_days, 0);
 }
+
+/// `exclude_repos` defaults to an empty list. A user who does not
+/// set the field gets the historical "scan every watchlist entry"
+/// behavior with no fetcher impact.
+#[test]
+fn exclude_repos_default_is_empty() {
+    let cfg = parse_config("").expect("empty parses");
+    assert!(cfg.filters.exclude_repos.is_empty());
+}
+
+/// `exclude_repos` accepts both exact `owner/repo` and `owner/*`
+/// org-wildcard entries. The config layer holds them as raw strings
+/// and defers shape interpretation to the orchestrator.
+#[test]
+fn exclude_repos_accepts_exact_and_wildcard_entries() {
+    let src = r#"
+[filters]
+exclude_repos = ["atuinsh/atuin", "astral-sh/*"]
+"#;
+    let cfg = parse_config(src).expect("parse");
+    assert_eq!(
+        cfg.filters.exclude_repos,
+        vec!["atuinsh/atuin".to_string(), "astral-sh/*".to_string()]
+    );
+    assert_eq!(
+        cfg.filters.cooldown_days, 14,
+        "cooldown_days should keep its default when exclude_repos is the only override"
+    );
+}
