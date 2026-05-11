@@ -78,6 +78,11 @@ scout took OWNER/REPO#N
     Record a contribution in the local ledger so cooldown_days
     filters the issue on subsequent scans.
 
+scout dropped OWNER/REPO#N
+    Record an investigated-and-abandoned engagement. Same cooldown
+    effect as `took`; different event tag so the two outcomes are
+    distinguishable in the ledger.
+
 scout explain OWNER/REPO#N
     Show the score breakdown for a single issue.
 ```
@@ -90,9 +95,9 @@ Global flags: `--config PATH`, `--watchlist PATH`, `--ledger PATH`.
 
 | score | issue | title |
 | ----: | :---- | :---- |
-| 0.85 | [clap-rs/clap#6353](https://github.com/clap-rs/clap/issues/6353) | `ValueCompleter::complete_at` for indexed multi-value completion |
-| 0.80 | [atuinsh/atuin#3442](https://github.com/atuinsh/atuin/issues/3442) | Wedged daemon hangs the shell on history RPCs |
-| 0.40 | [charmbracelet/gum#1068](https://github.com/charmbracelet/gum/issues/1068) | docs: log section typo |
+| 0.85 | [mlc-ai/mlc-llm#3487](https://github.com/mlc-ai/mlc-llm/issues/3487) | Tensor parallelism on Vulkan fails with SequentiallyConsistent SPIR-V barrier on Windows |
+| 0.70 | [clap-rs/clap#6372](https://github.com/clap-rs/clap/issues/6372) | Zsh completion scripts break when ksharrays is enabled |
+| 0.60 | [starship/starship#7450](https://github.com/starship/starship/issues/7450) | Exit status does not clear on empty command for the `status` and `character` modules |
 
 Scores depend on each issue's current state and your config weights, so
 rerunning `scout scan` reflects updates and any tuning in `config.toml`.
