@@ -10,10 +10,10 @@ product.
 
 ## Status
 
-Pre-alpha. The pipeline runs end to end. `scout init && scout scan`
-on the default empty watchlist exercises every layer without HTTP
-and prints a header-only markdown table; `scout scan` against a
-real watchlist returns ranked rows.
+Alpha (v0.1.0). The pipeline runs end to end. `scout init && scout
+scan` on the default empty watchlist exercises every layer without
+HTTP and prints a header-only markdown table; `scout scan` against
+a real watchlist returns ranked rows.
 
 Layer-by-layer:
 
@@ -36,12 +36,12 @@ Layer-by-layer:
    OWNER/REPO#N` prints the per-heuristic breakdown for one
    issue so the weighted sum is auditable.
 
-Known sharp edges before v0.1.0: the release pipeline builds
-Linux x86_64 + ARM and macOS x86_64 + ARM tarballs on a tag
-push (see [`.github/workflows/release.yml`](.github/workflows/release.yml)),
-but no v0.1.0 tag has been cut yet, so `cargo install --git` is
-the install path until then. The full month-one assessment lives
-in [`docs/monthly-updates/2026-05.md`](docs/monthly-updates/2026-05.md);
+Prebuilt tarballs for Linux x86_64, Linux ARM, and macOS ARM are
+attached to each release (see
+[`.github/workflows/release.yml`](.github/workflows/release.yml)
+for the build matrix). Intel Mac users build from source via
+`cargo install --git`. The full month-two assessment lives in
+[`docs/monthly-updates/2026-05.md`](docs/monthly-updates/2026-05.md);
 the design rationale is at
 [`docs/architecture.md`](docs/architecture.md).
 
@@ -59,10 +59,20 @@ the score.
 
 ## Install
 
+Tagged releases:
+
+```
+cargo install --git https://github.com/truffle-dev/scout --tag v0.1.0
+```
+
+Latest from `main`:
+
 ```
 cargo install --git https://github.com/truffle-dev/scout
 ```
 
+Or download a prebuilt tarball from the
+[releases page](https://github.com/truffle-dev/scout/releases).
 Requires Rust 1.95 or newer (edition 2024).
 
 ## Commands
