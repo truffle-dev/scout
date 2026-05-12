@@ -7,6 +7,7 @@ use scout::{
     CommentMeta, Label, PullRequestRef, TimelineEvent, TimelineSource, TimelineSourceIssue,
     UserRef, contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
     has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
+    pending_discussion_in_maintainer_comments,
 };
 
 fn label(name: &str) -> Label {
@@ -19,6 +20,15 @@ fn comment(association: &str) -> CommentMeta {
     CommentMeta {
         user: UserRef { login: "u".into() },
         author_association: association.into(),
+        body: None,
+    }
+}
+
+fn comment_with_body(association: &str, body: &str) -> CommentMeta {
+    CommentMeta {
+        user: UserRef { login: "u".into() },
+        author_association: association.into(),
+        body: Some(body.into()),
     }
 }
 
@@ -621,6 +631,131 @@ fn maintainer_in_comments_true_when_any_one_matches() {
         comment("NONE"),
     ];
     assert!(maintainer_in_comments(&comments));
+}
+
+// --- pending_discussion_in_maintainer_comments -----------------------
+
+#[test]
+fn pending_discussion_false_on_empty_slice() {
+    assert!(!pending_discussion_in_maintainer_comments(&[]));
+}
+
+#[test]
+fn pending_discussion_false_when_no_body() {
+    // `comment` helper sets body: None — same shape as a deleted
+    // comment GitHub returned as null. No body, no signal.
+    assert!(!pending_discussion_in_maintainer_comments(&[
+        comment("OWNER"),
+        comment("MEMBER"),
+    ]));
+}
+
+#[test]
+fn pending_discussion_true_on_owner_should_be_issue() {
+    let comments = [comment_with_body(
+        "OWNER",
+        "Thanks for the PR, but this should be an issue first to discuss the design.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_true_on_member_needs_rfc() {
+    let comments = [comment_with_body(
+        "MEMBER",
+        "This needs an RFC before we accept any implementation work.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_true_on_collaborator_needs_proposal_first() {
+    let comments = [comment_with_body(
+        "COLLABORATOR",
+        "Could you open a proposal first? We need to settle the API shape.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_true_on_we_need_to_decide() {
+    let comments = [comment_with_body(
+        "OWNER",
+        "We need to decide whether this lands as a flag or a separate command.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_true_on_havent_decided_yet() {
+    let comments = [comment_with_body(
+        "MEMBER",
+        "We haven't decided yet how to handle the multi-tenant case.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_true_on_before_implementing() {
+    let comments = [comment_with_body(
+        "OWNER",
+        "Before implementing, please run the proposal by us in an issue.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_case_insensitive() {
+    let comments = [comment_with_body(
+        "OWNER",
+        "THIS SHOULD BE AN ISSUE, not a PR until the design is settled.",
+    )];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_false_on_contributor_who_says_should_be_issue() {
+    // Drive-by suggestion from a CONTRIBUTOR (or anyone non-maintainer)
+    // doesn't carry gate weight. Project owners decide what gates PRs,
+    // not random commenters.
+    let comments = [comment_with_body(
+        "CONTRIBUTOR",
+        "I think this should be an issue first, not a PR.",
+    )];
+    assert!(!pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_false_on_lets_discuss_alone() {
+    // "Let's discuss" by itself is too broad — maintainers commonly say
+    // it on PRs that get merged. Only the gate-shaped phrasings match.
+    let comments = [comment_with_body(
+        "OWNER",
+        "Looks promising. Let's discuss the edge cases inline.",
+    )];
+    assert!(!pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_false_on_unrelated_friendly_comment() {
+    let comments = [comment_with_body(
+        "OWNER",
+        "Thanks for the report! Will take a look this week.",
+    )];
+    assert!(!pending_discussion_in_maintainer_comments(&comments));
+}
+
+#[test]
+fn pending_discussion_true_when_any_maintainer_comment_matches() {
+    // Earlier maintainer comment carries the gate; later "ok go for it"
+    // doesn't override it. Override path is the config knob, not the
+    // predicate.
+    let comments = [
+        comment_with_body("OWNER", "Thanks for filing!"),
+        comment_with_body("OWNER", "Actually, this should be an RFC first."),
+        comment_with_body("OWNER", "OK, this is settled, please PR."),
+    ];
+    assert!(pending_discussion_in_maintainer_comments(&comments));
 }
 
 // --- crosslinked_open_pr_in_timeline ---------------------------------

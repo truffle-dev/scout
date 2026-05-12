@@ -32,6 +32,7 @@ pub use fetcher::{
 pub use infer::{
     contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
     has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
+    pending_discussion_in_maintainer_comments,
 };
 pub use init::{
     InitError, InitSummary, WriteOutcome, default_config_path, default_watchlist_path,

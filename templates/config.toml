@@ -40,6 +40,11 @@ exclude_repos = []
 # PRing don't waste screening time. Set to false to keep them in
 # the output (the `no_pr` score factor still penalizes them).
 drop_if_open_pr = true
+# Drop issues where a maintainer comment carries a "needs RFC /
+# proposal / let's discuss this first" signal. Default true because
+# PRs against issues with a pending design discussion typically
+# draw a "should be an issue, not a PR" close.
+drop_if_pending_discussion = true
 
 [output]
 # One of "auto", "always", "never". Validated at the CLI layer.

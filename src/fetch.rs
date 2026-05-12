@@ -123,6 +123,12 @@ pub struct CommentMeta {
     /// `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIMER`,
     /// `FIRST_TIME_CONTRIBUTOR`, `MANNEQUIN`, `NONE`.
     pub author_association: String,
+    /// Comment body. `None` when GitHub omits it (e.g. deleted comments
+    /// return `null`); `#[serde(default)]` so older callers that only
+    /// fed user + author_association into the struct still deserialize
+    /// cleanly. Consumed by `pending_discussion_in_maintainer_comments`.
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 /// Minimal timeline-event metadata sliced out of a single element of a

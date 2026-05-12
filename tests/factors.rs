@@ -13,6 +13,7 @@ fn comment(login: &str, association: &str) -> CommentMeta {
             login: login.into(),
         },
         author_association: association.into(),
+        body: None,
     }
 }
 

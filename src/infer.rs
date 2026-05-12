@@ -226,6 +226,79 @@ fn is_maintainer_comment(c: &CommentMeta) -> bool {
     )
 }
 
+/// Any maintainer comment on the issue carries a "discuss-first /
+/// needs-proposal / not-yet-decided" signal, meaning the issue is not
+/// PR-ready yet. Drives the optional `drop_if_pending_discussion`
+/// planner filter: when this returns `true`, opening a PR against
+/// the issue would invite a "this should be an issue / proposal /
+/// RFC first" close from the maintainer.
+///
+/// Only matches maintainer-authored comments (`OWNER` ∪ `MEMBER` ∪
+/// `COLLABORATOR`); drive-by suggestions from random commenters don't
+/// move the needle on whether the project wants a PR. Patterns are
+/// intentionally high-specificity: `"let's discuss"` alone is too
+/// broad (maintainers commonly say it on PRs that get merged), but
+/// `"let's discuss this first"` or `"we need to decide"` carries the
+/// gate-shape. Compares against the lowercased body so casing varies
+/// don't matter; comments with no body (deleted, GitHub omission)
+/// don't match.
+///
+/// Caveat: this fires on the FIRST maintainer comment that matches;
+/// a later resolution comment like "OK, this is settled, please PR"
+/// won't override it. Mitigation is on the config side
+/// (`drop_if_pending_discussion = false` to bypass) rather than
+/// inside this predicate, which keeps the pattern surface narrow.
+pub fn pending_discussion_in_maintainer_comments(comments: &[CommentMeta]) -> bool {
+    comments
+        .iter()
+        .filter(|c| is_maintainer_comment(c))
+        .any(|c| {
+            c.body
+                .as_deref()
+                .map(comment_signals_pending_discussion)
+                .unwrap_or(false)
+        })
+}
+
+/// Whether a single comment body carries a pending-discussion signal.
+/// Public via `pending_discussion_in_maintainer_comments`; the
+/// per-body predicate stays private because callers only need the
+/// slice-level answer.
+fn comment_signals_pending_discussion(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    const PENDING_DISCUSSION_MARKERS: &[&str] = &[
+        "this should be an issue",
+        "this should be a proposal",
+        "this should be an rfc",
+        "let's discuss this first",
+        "let's discuss this before",
+        "let us discuss this first",
+        "needs an rfc",
+        "needs a proposal first",
+        "needs design discussion",
+        "needs a design discussion",
+        "open a proposal first",
+        "open a proposal before",
+        "before opening a pr",
+        "before opening a pull request",
+        "before implementing",
+        "we need to decide",
+        "we haven't decided",
+        "we have not decided",
+        "we haven't figured out",
+        "we have not figured out",
+        "haven't decided yet",
+        "have not decided yet",
+        "i'd want a proposal",
+        "i would want a proposal",
+        "i'd like a proposal",
+        "i would like a proposal",
+        "i'd want an rfc",
+        "i would want an rfc",
+    ];
+    PENDING_DISCUSSION_MARKERS.iter().any(|m| lower.contains(m))
+}
+
 /// Whether any timeline event cross-references an open pull request.
 /// Drives the `no_crosslinked_pr` factor: when this returns `true`,
 /// someone else's PR already touches the issue and scout should

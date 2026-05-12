@@ -14,8 +14,8 @@ use scout::scan::{
 use scout::took::{IssueRef, append_entry};
 use scout::watchlist::{WatchEntry, Watchlist, WatchlistError};
 use scout::{
-    Filters, IssueMeta, Label, PullRequestRef, RepoMeta, TimelineEvent, TimelineSource,
-    TimelineSourceIssue, UserRef, Weights,
+    CommentMeta, Filters, IssueMeta, Label, PullRequestRef, RepoMeta, TimelineEvent,
+    TimelineSource, TimelineSourceIssue, UserRef, Weights,
 };
 use tempfile::TempDir;
 
@@ -1098,6 +1098,80 @@ fn plan_drop_if_open_pr_ignores_closed_pr_crosslinks() {
         out.len(),
         1,
         "closed crosslinked PRs do not trigger the drop"
+    );
+}
+
+/// Build a single maintainer comment carrying the given body. Shared
+/// helper across the `drop_if_pending_discussion` tests.
+fn maintainer_comment(body: &str) -> CommentMeta {
+    CommentMeta {
+        user: UserRef { login: "mt".into() },
+        author_association: "OWNER".into(),
+        body: Some(body.into()),
+    }
+}
+
+/// An issue whose maintainer comments carry a "discuss first / needs
+/// proposal" signal is dropped under default `Filters`
+/// (`drop_if_pending_discussion = true`). PRs against these issues
+/// typically draw a "should be an issue, not a PR" close.
+#[test]
+fn plan_drops_issues_with_pending_maintainer_discussion() {
+    let pending = issue_fixture(1, "2026-04-28T00:00:00Z");
+    let clean = issue_fixture(2, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![
+            FetchedIssue {
+                issue: pending,
+                comments: vec![maintainer_comment(
+                    "Thanks for filing — this should be an RFC first.",
+                )],
+                timeline: vec![],
+            },
+            fetched_issue(clean),
+        ],
+    )];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "issue with pending design discussion is filtered out"
+    );
+    assert_eq!(out[0].issue.number, 2);
+}
+
+/// `drop_if_pending_discussion = false` opts back into seeing
+/// candidates with a pending design discussion. Symmetric with the
+/// `drop_if_open_pr = false` opt-out path.
+#[test]
+fn plan_drop_if_pending_discussion_false_keeps_them() {
+    let pending = issue_fixture(1, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![FetchedIssue {
+            issue: pending,
+            comments: vec![maintainer_comment(
+                "We need to decide the API shape before any PR.",
+            )],
+            timeline: vec![],
+        }],
+    )];
+    let filters = Filters {
+        drop_if_pending_discussion: false,
+        ..Filters::default()
+    };
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &filters, &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "drop_if_pending_discussion=false keeps issues with pending design discussion"
     );
 }
 
