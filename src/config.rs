@@ -88,7 +88,11 @@ impl From<WeightsConfig> for Weights {
 /// drops watchlist entries before any fetch happens, so a venue-blocked
 /// repo (CLA-gated, no-AI policy, maintainer signal) never costs
 /// HTTP budget. Each entry is `owner/repo` for an exact match or
-/// `owner/*` for the entire org.
+/// `owner/*` for the entire org. `drop_if_open_pr` drops issues that
+/// already have an open cross-referenced pull request; default `true`
+/// because a candidate with someone else's PR in flight rarely earns
+/// a parallel PR. Set to `false` to keep them in the output (the
+/// `no_pr` score factor still penalizes them).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Filters {
@@ -97,6 +101,7 @@ pub struct Filters {
     pub cooldown_days: u32,
     pub exclude_labels: Vec<String>,
     pub exclude_repos: Vec<String>,
+    pub drop_if_open_pr: bool,
 }
 
 impl Default for Filters {
@@ -111,6 +116,7 @@ impl Default for Filters {
                 "duplicate".to_string(),
             ],
             exclude_repos: Vec::new(),
+            drop_if_open_pr: true,
         }
     }
 }

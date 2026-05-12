@@ -13,7 +13,10 @@ use scout::scan::{
 };
 use scout::took::{IssueRef, append_entry};
 use scout::watchlist::{WatchEntry, Watchlist, WatchlistError};
-use scout::{Filters, IssueMeta, Label, PullRequestRef, RepoMeta, UserRef, Weights};
+use scout::{
+    Filters, IssueMeta, Label, PullRequestRef, RepoMeta, TimelineEvent, TimelineSource,
+    TimelineSourceIssue, UserRef, Weights,
+};
 use tempfile::TempDir;
 
 const EPS: f64 = 1e-9;
@@ -991,6 +994,111 @@ fn plan_passes_eligible_issue_with_correct_borrow_shape() {
     assert_eq!(row.contributing, Some("# Contributing\n\nWelcome!\n"));
     assert!(row.comments.is_empty());
     assert!(row.timeline.is_empty());
+}
+
+/// Build a synthetic timeline carrying one `cross-referenced` event
+/// that points at a PR with the given state. The `no_crosslinked_pr`
+/// classifier and `crosslinked_open_pr_in_timeline` consume exactly
+/// this shape; sharing one helper across the three drop_if_open_pr
+/// tests keeps the fixture surface narrow.
+fn timeline_with_crosslinked_pr(state: &str) -> Vec<TimelineEvent> {
+    vec![TimelineEvent {
+        event: "cross-referenced".into(),
+        source: Some(TimelineSource {
+            issue: Some(TimelineSourceIssue {
+                state: state.into(),
+                pull_request: Some(PullRequestRef {
+                    html_url: "https://example.com/pull/99".into(),
+                }),
+            }),
+        }),
+    }]
+}
+
+/// An issue whose timeline carries an open cross-referenced PR is
+/// dropped under the default `Filters` (`drop_if_open_pr = true`).
+/// This is the friction the filter exists to remove: someone else has
+/// a PR in flight, the candidate is not worth a screening slot.
+#[test]
+fn plan_drops_issues_with_open_crosslinked_pr() {
+    let with_open_pr = issue_fixture(1, "2026-04-28T00:00:00Z");
+    let clean = issue_fixture(2, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![
+            FetchedIssue {
+                issue: with_open_pr,
+                comments: vec![],
+                timeline: timeline_with_crosslinked_pr("open"),
+            },
+            fetched_issue(clean),
+        ],
+    )];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "issue with an open crosslinked PR is filtered out"
+    );
+    assert_eq!(out[0].issue.number, 2);
+}
+
+/// `drop_if_open_pr = false` opts back into seeing candidates with an
+/// open crosslinked PR. The `no_pr` score factor still penalizes them
+/// downstream; this knob is for users who want to inspect the
+/// dropped set rather than rely on the hard filter alone.
+#[test]
+fn plan_drop_if_open_pr_false_keeps_them() {
+    let with_open_pr = issue_fixture(1, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![FetchedIssue {
+            issue: with_open_pr,
+            comments: vec![],
+            timeline: timeline_with_crosslinked_pr("open"),
+        }],
+    )];
+    let filters = Filters {
+        drop_if_open_pr: false,
+        ..Filters::default()
+    };
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &filters, &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "drop_if_open_pr=false keeps issues with open crosslinked PRs"
+    );
+}
+
+/// Only *open* crosslinked PRs trigger the drop. A closed crosslinked
+/// PR (someone tried a fix, abandoned it, the PR is now closed) means
+/// the issue is fair game again — the work is not in flight.
+#[test]
+fn plan_drop_if_open_pr_ignores_closed_pr_crosslinks() {
+    let with_closed_pr = issue_fixture(1, "2026-04-28T00:00:00Z");
+
+    let repos = vec![fetched_repo(
+        "truffle-dev/scout",
+        vec![FetchedIssue {
+            issue: with_closed_pr,
+            comments: vec![],
+            timeline: timeline_with_crosslinked_pr("closed"),
+        }],
+    )];
+    let ledger = scout::scan::LedgerIndex::default();
+
+    let out = plan(&repos, &Filters::default(), &ledger, APR_28_2026);
+    assert_eq!(
+        out.len(),
+        1,
+        "closed crosslinked PRs do not trigger the drop"
+    );
 }
 
 fn watchlist_of(slugs: &[&str]) -> Watchlist {

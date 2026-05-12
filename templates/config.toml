@@ -35,6 +35,11 @@ exclude_labels = ["wontfix", "invalid", "duplicate"]
 # Each entry is `owner/repo` for an exact match or `owner/*` for
 # the entire org.
 exclude_repos = []
+# Drop issues that already have an open cross-referenced pull
+# request. Default true so candidates someone else is already
+# PRing don't waste screening time. Set to false to keep them in
+# the output (the `no_pr` score factor still penalizes them).
+drop_if_open_pr = true
 
 [output]
 # One of "auto", "always", "never". Validated at the CLI layer.
