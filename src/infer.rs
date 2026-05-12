@@ -97,7 +97,9 @@ pub fn has_non_effort_label(labels: &[Label]) -> bool {
 
 /// CONTRIBUTING body looks contribution-friendly: no Contributor
 /// License Agreement gate, no "please discuss / email / contact
-/// before" gate, no categorical ban on AI-implemented contributions.
+/// before" gate, no categorical ban on AI-implemented contributions,
+/// no label-gate that auto-closes PRs whose linked issue is missing
+/// a specific label.
 /// `None` (repo has no CONTRIBUTING) is treated as "ok" — most small
 /// repos don't ship one and they're conventionally open to drive-by
 /// PRs; the repos that do gate contributions write the gate into
@@ -111,7 +113,11 @@ pub fn has_non_effort_label(labels: &[Label]) -> bool {
 /// "open an issue / discuss / email / reach out first" idioms; the
 /// AI-ban vocabulary covers projects that categorically refuse
 /// AI-implemented or autonomous-agent contributions (typst, astral
-/// org, sprocket are the canonical instances at the time of writing).
+/// org, sprocket are the canonical instances at the time of writing);
+/// the label-gate vocabulary covers projects where a bot auto-closes
+/// PRs whose linked issue lacks a specific label (cli/cli is the
+/// canonical instance, with `github-actions[bot]` enforcing a 4-day
+/// timer on missing `help wanted`).
 pub fn contributing_looks_ok(body: Option<&str>) -> bool {
     let Some(body) = body else {
         return true;
@@ -165,10 +171,29 @@ pub fn contributing_looks_ok(body: Option<&str>) -> bool {
         "ai generated contributions will not",
         "will close any pull requests that we believe were created autonomously",
     ];
+    // Label-gate markers: phrases declaring that PRs are only accepted
+    // for issues carrying a specific label, paired with an enforcement
+    // bot that auto-closes non-conforming PRs. Patterns lean on the
+    // restrictive shape ("for issues labelled X", "without the X
+    // label", "external pull requests will not be accepted") because
+    // friendly recommendations ("look for issues labelled `good first
+    // issue` if you want a starting point") don't carry the gate-shape.
+    const LABEL_GATE_MARKERS: &[&str] = &[
+        "we accept pull requests for issues labelled",
+        "we accept pull requests for issues labeled",
+        "we only accept pull requests for issues labelled",
+        "we only accept pull requests for issues labeled",
+        "pull request for issues without the",
+        "pull requests for issues without the",
+        "open a pull request for any issue without",
+        "open pull requests for any issue without",
+        "external pull requests will not be accepted",
+    ];
     !CLA_MARKERS
         .iter()
         .chain(GATE_MARKERS.iter())
         .chain(AI_BAN_MARKERS.iter())
+        .chain(LABEL_GATE_MARKERS.iter())
         .any(|m| lower.contains(m))
 }
 

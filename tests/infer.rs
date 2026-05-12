@@ -312,6 +312,69 @@ fn contributing_ok_no_false_positive_on_ai_used_for_review() {
     assert!(contributing_looks_ok(Some(body)));
 }
 
+#[test]
+fn contributing_not_ok_on_cli_cli_label_gate_positive_clause() {
+    // Verbatim from cli/cli .github/CONTRIBUTING.md (2026-05-12).
+    let body = "\
+        We accept pull requests for issues labelled `help wanted`.\n\
+        We encourage issues and discussion posts for all other\n\
+        contributions.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_cli_cli_label_gate_negative_clause() {
+    // Verbatim from cli/cli .github/CONTRIBUTING.md "Please do NOT" list.
+    let body = "\
+        Please do NOT:\n\
+        * Open a pull request for issues without the `help wanted`\n\
+        label or explicit Acceptance Criteria";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_cli_cli_external_pr_rejection_clause() {
+    // Verbatim from cli/cli `core`-label section.
+    let body = "\
+        Open pull requests for any issue marked `core`. These issues\n\
+        require additional context from the core CLI team at GitHub\n\
+        and any external pull requests will not be accepted";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_not_ok_on_we_only_accept_phrasing() {
+    // Stricter variant of cli/cli's positive declaration. Some repos
+    // use "only" to underscore the gate.
+    let body = "\
+        We only accept pull requests for issues labeled `accepted`.\n\
+        All other contributions should start as an issue.";
+    assert!(!contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_ok_no_false_positive_on_friendly_label_recommendation() {
+    // A friendly recommendation pointing newcomers at a label is NOT a
+    // gate. The patterns require the restrictive shape ("accept PRs for
+    // issues labelled X" / "without the X label") which a recommendation
+    // doesn't carry.
+    let body = "\
+        Looking for a place to start? Browse our `good first issue`\n\
+        and `help wanted` labels for issues ready to pick up. PRs are\n\
+        welcome for any open issue.";
+    assert!(contributing_looks_ok(Some(body)));
+}
+
+#[test]
+fn contributing_ok_no_false_positive_on_generic_label_mention() {
+    // Mentioning labels in passing (here, on the issue side) is fine.
+    let body = "\
+        File a new issue if you hit a regression. Tag it with the\n\
+        appropriate area label. Pull requests are welcome at any\n\
+        stage.";
+    assert!(contributing_looks_ok(Some(body)));
+}
+
 // --- has_effort_label ------------------------------------------------
 
 #[test]
