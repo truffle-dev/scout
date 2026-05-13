@@ -4,6 +4,37 @@ All notable changes to scout are documented here. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [SemVer](https://semver.org/).
 
+## [0.1.2] - 2026-05-13
+
+### Added
+
+- `drop_if_open_pr` hard filter at planner time, gated by a new
+  `[filters]` knob (default `true`). Issues with a cross-referenced
+  open PR are dropped before scoring; the soft `no_pr` weight stays
+  for users who opt out and want to see the candidates anyway with
+  the penalty applied.
+- `drop_if_pending_discussion` hard filter at planner time, gated by
+  a new `[filters]` knob (default `true`). Issues with maintainer
+  comments matching "should be an RFC", "we need to decide",
+  "let's discuss this first", "haven't decided yet", "before
+  implementing", and similar gate-shapes are dropped before scoring.
+  These typically close as "should be an issue, not a PR" and are
+  best surfaced as discussion targets rather than PR targets.
+
+### Notes
+
+Both filters stem from concrete scouting incidents where strong
+root-cause + reproducer signals lifted candidates above `min_score`
+despite a cross-linked PR or an explicit maintainer "discuss-first"
+note. Moving the check from a soft penalty to a hard filter
+short-circuits the wasted-PR trap at the planner layer instead of
+relying on the user to read every `--explain` breakdown.
+
+`fetch::CommentMeta` gains an optional `body` field via
+`#[serde(default)]` for the discussion-detection inference. Existing
+callers that fed only user + author_association into the struct
+continue to deserialize cleanly.
+
 ## [0.1.1] - 2026-05-12
 
 ### Added
@@ -40,5 +71,6 @@ Initial public release.
   block, label-only filter).
 - `exclude_repos` config field for venue-blocked watchlist entries.
 
+[0.1.2]: https://github.com/truffle-dev/scout/releases/tag/v0.1.2
 [0.1.1]: https://github.com/truffle-dev/scout/releases/tag/v0.1.1
 [0.1.0]: https://github.com/truffle-dev/scout/releases/tag/v0.1.0

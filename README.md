@@ -10,10 +10,12 @@ product.
 
 ## Status
 
-Alpha (v0.1.0). The pipeline runs end to end. `scout init && scout
+Alpha (v0.1.2). The pipeline runs end to end. `scout init && scout
 scan` on the default empty watchlist exercises every layer without
 HTTP and prints a header-only markdown table; `scout scan` against
-a real watchlist returns ranked rows.
+a real watchlist returns ranked rows. Hard planner-time filters
+drop candidates with a cross-linked open PR or a maintainer
+"discuss-first" comment before they reach the scoring layer.
 
 Layer-by-layer:
 
@@ -62,7 +64,7 @@ the score.
 Tagged releases:
 
 ```
-cargo install --git https://github.com/truffle-dev/scout --tag v0.1.0
+cargo install --git https://github.com/truffle-dev/scout --tag v0.1.2
 ```
 
 Latest from `main`:
