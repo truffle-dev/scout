@@ -4,6 +4,28 @@ All notable changes to scout are documented here. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [SemVer](https://semver.org/).
 
+## [0.1.3] - 2026-05-13
+
+### Added
+
+- `drop_if_copilot_assigned` hard filter at planner time, gated by a
+  new `[filters]` knob (default `true`). Issues whose timeline carries
+  an `assigned` event naming GitHub's Copilot swe-agent (`Copilot` or
+  `copilot-swe-agent`) are dropped before scoring. This closes the
+  race window where a maintainer has handed the issue to Copilot but
+  the auto-PR has not yet emitted its cross-referenced event, which
+  `drop_if_open_pr` cannot see.
+
+### Notes
+
+The motivating shape is vitest#10307: hi-ogawa assigned Copilot at
+2026-05-09T01:34Z, the auto-PR cross-reference fired at
+2026-05-11T23:02Z. A scout run inside that ~2-day window would have
+surfaced an issue a human had no business taking. `fetch::TimelineEvent`
+gains an optional `assignee: Option<UserRef>` field via
+`#[serde(default)]`, so existing fixtures and cached transcripts
+continue to deserialize without change.
+
 ## [0.1.2] - 2026-05-13
 
 ### Added
