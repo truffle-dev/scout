@@ -144,12 +144,21 @@ pub struct TimelineEvent {
     /// Event type. Documented values include `commented`,
     /// `cross-referenced`, `labeled`, `assigned`, `referenced`,
     /// `closed`, `reopened`, etc. The `no_crosslinked_pr` heuristic
-    /// only consumes `cross-referenced`.
+    /// only consumes `cross-referenced`; the `assigned_to_copilot`
+    /// heuristic only consumes `assigned`.
     pub event: String,
     /// Cross-reference source. Present only on `cross-referenced`
     /// events; other event types omit this field entirely.
     #[serde(default)]
     pub source: Option<TimelineSource>,
+    /// Assignee on `assigned` events. Present only when `event ==
+    /// "assigned"` (and not always then — GitHub sometimes returns the
+    /// event with assignee on the issue body rather than the event).
+    /// Used by `assigned_to_copilot_in_timeline` to catch the race
+    /// window between Copilot-assignment and the auto-PR's
+    /// cross-reference event firing.
+    #[serde(default)]
+    pub assignee: Option<UserRef>,
 }
 
 /// `source` of a `cross-referenced` timeline event. The wire shape

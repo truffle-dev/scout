@@ -334,6 +334,37 @@ fn is_open_pr_cross_reference(e: &TimelineEvent) -> bool {
     issue.pull_request.is_some() && issue.state == "open"
 }
 
+/// Whether any timeline event records an assignment to GitHub's
+/// Copilot agent. Drives the optional `drop_if_copilot_assigned`
+/// planner filter: when a maintainer assigns an issue to Copilot,
+/// the auto-PR opens within minutes-to-days, and humans should not
+/// race that PR. `drop_if_open_pr` catches the same outcome once
+/// the cross-reference event fires, but there is a real window
+/// (observed at vitest#10307: ~2 days between assignment and
+/// cross-reference) where only the assignment event is visible.
+///
+/// Matches assignee login `"Copilot"` (the display login GitHub uses
+/// in the API for the swe-agent) and the alias `"copilot-swe-agent"`,
+/// case-insensitive. Empty slice returns `false`. Non-assigned events
+/// return `false` regardless of their other fields.
+pub fn assigned_to_copilot_in_timeline(events: &[TimelineEvent]) -> bool {
+    events.iter().any(is_copilot_assignment)
+}
+
+/// Whether a single timeline event is an assignment to the Copilot
+/// agent. Public via `assigned_to_copilot_in_timeline`; the
+/// per-event predicate stays private.
+fn is_copilot_assignment(e: &TimelineEvent) -> bool {
+    if e.event != "assigned" {
+        return false;
+    }
+    let Some(assignee) = &e.assignee else {
+        return false;
+    };
+    let login = assignee.login.to_lowercase();
+    login == "copilot" || login == "copilot-swe-agent"
+}
+
 /// Days between an ISO-8601 timestamp and a reference unix-seconds
 /// `now`. Negative values are possible if the timestamp is in the
 /// future (clock skew between GitHub and the caller). Returns `None`

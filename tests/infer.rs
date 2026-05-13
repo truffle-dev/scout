@@ -5,8 +5,9 @@
 
 use scout::{
     CommentMeta, Label, PullRequestRef, TimelineEvent, TimelineSource, TimelineSourceIssue,
-    UserRef, contributing_looks_ok, crosslinked_open_pr_in_timeline, days_since, has_effort_label,
-    has_non_effort_label, has_reproducer, has_root_cause, maintainer_in_comments,
+    UserRef, assigned_to_copilot_in_timeline, contributing_looks_ok,
+    crosslinked_open_pr_in_timeline, days_since, has_effort_label, has_non_effort_label,
+    has_reproducer, has_root_cause, maintainer_in_comments,
     pending_discussion_in_maintainer_comments,
 };
 
@@ -43,6 +44,7 @@ fn cross_ref(state: &str, is_pr: bool) -> TimelineEvent {
                 }),
             }),
         }),
+        assignee: None,
     }
 }
 
@@ -50,6 +52,17 @@ fn other_event(name: &str) -> TimelineEvent {
     TimelineEvent {
         event: name.into(),
         source: None,
+        assignee: None,
+    }
+}
+
+fn assigned_to(login: &str) -> TimelineEvent {
+    TimelineEvent {
+        event: "assigned".into(),
+        source: None,
+        assignee: Some(UserRef {
+            login: login.into(),
+        }),
     }
 }
 
@@ -816,10 +829,100 @@ fn crosslinked_open_pr_false_when_source_or_issue_is_missing() {
     let no_source = TimelineEvent {
         event: "cross-referenced".into(),
         source: None,
+        assignee: None,
     };
     let no_issue = TimelineEvent {
         event: "cross-referenced".into(),
         source: Some(TimelineSource { issue: None }),
+        assignee: None,
     };
     assert!(!crosslinked_open_pr_in_timeline(&[no_source, no_issue]));
+}
+
+// --- assigned_to_copilot_in_timeline ---------------------------------
+
+#[test]
+fn assigned_to_copilot_false_on_empty_slice() {
+    assert!(!assigned_to_copilot_in_timeline(&[]));
+}
+
+#[test]
+fn assigned_to_copilot_false_on_only_non_assigned_events() {
+    let events = [
+        other_event("commented"),
+        other_event("cross-referenced"),
+        other_event("labeled"),
+        other_event("closed"),
+    ];
+    assert!(!assigned_to_copilot_in_timeline(&events));
+}
+
+#[test]
+fn assigned_to_copilot_false_on_human_assignee() {
+    let events = [
+        assigned_to("hi-ogawa"),
+        assigned_to("epage"),
+        assigned_to("someone-else"),
+    ];
+    assert!(!assigned_to_copilot_in_timeline(&events));
+}
+
+#[test]
+fn assigned_to_copilot_true_on_display_login() {
+    // GitHub's API returns `"Copilot"` as the assignee.login for the
+    // swe-agent. Verified against vitest-dev/vitest#10307 timeline.
+    assert!(assigned_to_copilot_in_timeline(&[assigned_to("Copilot")]));
+}
+
+#[test]
+fn assigned_to_copilot_true_on_alias_login() {
+    assert!(assigned_to_copilot_in_timeline(&[assigned_to(
+        "copilot-swe-agent"
+    )]));
+}
+
+#[test]
+fn assigned_to_copilot_true_case_insensitive() {
+    assert!(assigned_to_copilot_in_timeline(&[assigned_to("COPILOT")]));
+    assert!(assigned_to_copilot_in_timeline(&[assigned_to(
+        "Copilot-SWE-Agent"
+    )]));
+}
+
+#[test]
+fn assigned_to_copilot_true_when_any_one_event_matches() {
+    let events = [
+        other_event("commented"),
+        assigned_to("hi-ogawa"),
+        assigned_to("Copilot"),
+        other_event("labeled"),
+    ];
+    assert!(assigned_to_copilot_in_timeline(&events));
+}
+
+#[test]
+fn assigned_to_copilot_false_when_event_is_assigned_but_no_assignee() {
+    // Defensive: an event tagged `assigned` but with `assignee`
+    // missing must not panic and must not count as a match.
+    let no_assignee = TimelineEvent {
+        event: "assigned".into(),
+        source: None,
+        assignee: None,
+    };
+    assert!(!assigned_to_copilot_in_timeline(&[no_assignee]));
+}
+
+#[test]
+fn assigned_to_copilot_false_on_non_assigned_event_with_copilot_assignee() {
+    // Defensive: only `event == "assigned"` counts. A future GitHub
+    // API change that puts an `assignee` field on a different event
+    // type must not bleed into this signal.
+    let weird = TimelineEvent {
+        event: "labeled".into(),
+        source: None,
+        assignee: Some(UserRef {
+            login: "Copilot".into(),
+        }),
+    };
+    assert!(!assigned_to_copilot_in_timeline(&[weird]));
 }

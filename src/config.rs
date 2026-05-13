@@ -93,6 +93,11 @@ impl From<WeightsConfig> for Weights {
 /// because a candidate with someone else's PR in flight rarely earns
 /// a parallel PR. Set to `false` to keep them in the output (the
 /// `no_pr` score factor still penalizes them).
+/// `drop_if_copilot_assigned` drops issues where a maintainer has
+/// assigned GitHub's Copilot swe-agent; default `true` because the
+/// auto-PR opens within minutes-to-days and humans should not race
+/// it. Covers the window between assignment and auto-PR cross-
+/// reference event, which `drop_if_open_pr` cannot see.
 /// `drop_if_pending_discussion` drops issues where a maintainer
 /// comment carries a "needs RFC / proposal / let's discuss this
 /// first" signal; default `true` because PRs against issues with a
@@ -107,6 +112,7 @@ pub struct Filters {
     pub exclude_labels: Vec<String>,
     pub exclude_repos: Vec<String>,
     pub drop_if_open_pr: bool,
+    pub drop_if_copilot_assigned: bool,
     pub drop_if_pending_discussion: bool,
 }
 
@@ -123,6 +129,7 @@ impl Default for Filters {
             ],
             exclude_repos: Vec::new(),
             drop_if_open_pr: true,
+            drop_if_copilot_assigned: true,
             drop_if_pending_discussion: true,
         }
     }

@@ -1012,6 +1012,7 @@ fn timeline_with_crosslinked_pr(state: &str) -> Vec<TimelineEvent> {
                 }),
             }),
         }),
+        assignee: None,
     }]
 }
 

@@ -25,8 +25,8 @@ use crate::config::{Config, Filters, parse as parse_config};
 use crate::fetch::{CommentMeta, IssueMeta, RepoMeta, TimelineEvent};
 use crate::fetcher::{AgeFilter, fetch_repos};
 use crate::infer::{
-    crosslinked_open_pr_in_timeline, days_since, parse_iso8601_z,
-    pending_discussion_in_maintainer_comments,
+    assigned_to_copilot_in_timeline, crosslinked_open_pr_in_timeline, days_since,
+    parse_iso8601_z, pending_discussion_in_maintainer_comments,
 };
 use crate::init;
 use crate::rank::{RankInput, rank};
@@ -361,7 +361,14 @@ fn repo_matches(entry: &WatchEntry, pattern: &str) -> bool {
 ///      from acting on a candidate the score-pass alone would not
 ///      always drop below `min_score`. Set the knob to `false` to
 ///      keep these issues in the output.
-///   6. Pending design discussion
+///   6. Copilot assignment
+///      (`filters.drop_if_copilot_assigned`, default `true`):
+///      dropped if any timeline event records assignment to GitHub's
+///      Copilot swe-agent. Covers the window between Copilot-
+///      assignment and the auto-PR's cross-reference event firing,
+///      which `drop_if_open_pr` cannot see. Set the knob to `false`
+///      to keep these issues in the output.
+///   7. Pending design discussion
 ///      (`filters.drop_if_pending_discussion`, default `true`):
 ///      dropped if any maintainer comment carries a "needs RFC /
 ///      proposal / let's discuss this first" signal. Issues with
@@ -410,6 +417,9 @@ pub fn plan<'a>(
                 continue;
             }
             if filters.drop_if_open_pr && crosslinked_open_pr_in_timeline(&fi.timeline) {
+                continue;
+            }
+            if filters.drop_if_copilot_assigned && assigned_to_copilot_in_timeline(&fi.timeline) {
                 continue;
             }
             if filters.drop_if_pending_discussion

@@ -28,6 +28,7 @@ fn cross_ref(state: &str, is_pr: bool) -> TimelineEvent {
                 }),
             }),
         }),
+        assignee: None,
     }
 }
 
@@ -35,6 +36,7 @@ fn other_event(name: &str) -> TimelineEvent {
     TimelineEvent {
         event: name.into(),
         source: None,
+        assignee: None,
     }
 }
 
