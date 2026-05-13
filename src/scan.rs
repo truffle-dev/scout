@@ -25,8 +25,8 @@ use crate::config::{Config, Filters, parse as parse_config};
 use crate::fetch::{CommentMeta, IssueMeta, RepoMeta, TimelineEvent};
 use crate::fetcher::{AgeFilter, fetch_repos};
 use crate::infer::{
-    assigned_to_copilot_in_timeline, crosslinked_open_pr_in_timeline, days_since,
-    parse_iso8601_z, pending_discussion_in_maintainer_comments,
+    assigned_to_copilot_in_timeline, crosslinked_open_pr_in_timeline, days_since, parse_iso8601_z,
+    pending_discussion_in_maintainer_comments,
 };
 use crate::init;
 use crate::rank::{RankInput, rank};
