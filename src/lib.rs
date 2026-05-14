@@ -17,7 +17,9 @@ pub mod score;
 pub mod took;
 pub mod watchlist;
 
-pub use config::{Auth, Config, Filters, Output, WeightsConfig, parse as parse_config};
+pub use config::{
+    Auth, BUNDLED_EXCLUDE_REPOS, Config, Filters, Output, WeightsConfig, parse as parse_config,
+};
 pub use fetch::{
     CONTRIBUTING_PATHS, CommentMeta, DEFAULT_PAGE_CAP, FetchError, IssueMeta, Label,
     PullRequestRef, RepoMeta, TimelineEvent, TimelineSource, TimelineSourceIssue, UserRef,

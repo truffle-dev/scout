@@ -4,7 +4,7 @@
 //! consumes. No filesystem IO; every case builds the TOML as a string
 //! inline.
 
-use scout::{Weights, parse_config};
+use scout::{BUNDLED_EXCLUDE_REPOS, Weights, parse_config};
 
 const EPS: f64 = 1e-9;
 
@@ -150,12 +150,31 @@ fn cooldown_days_zero_disables_filter() {
     assert_eq!(cfg.filters.cooldown_days, 0);
 }
 
-/// `exclude_repos` defaults to an empty list. A user who does not
-/// set the field gets the historical "scan every watchlist entry"
-/// behavior with no fetcher impact.
+/// `exclude_repos` defaults to the bundled venue-block list. Every entry
+/// in `BUNDLED_EXCLUDE_REPOS` is present in a default-parsed config, so a
+/// user who ships `scout init` and never touches the file gets the
+/// known-bad venues filtered out for free. Setting the field in user
+/// config replaces this list wholesale (serde `default` semantics).
 #[test]
-fn exclude_repos_default_is_empty() {
+fn exclude_repos_default_matches_bundled_list() {
     let cfg = parse_config("").expect("empty parses");
+    assert_eq!(cfg.filters.exclude_repos.len(), BUNDLED_EXCLUDE_REPOS.len());
+    for entry in BUNDLED_EXCLUDE_REPOS {
+        assert!(
+            cfg.filters.exclude_repos.iter().any(|e| e == *entry),
+            "bundled entry {entry:?} should appear in default exclude_repos"
+        );
+    }
+}
+
+/// A user who explicitly sets `exclude_repos = []` overrides the bundled
+/// defaults to nothing. Confirms serde's `#[serde(default)]` per-field
+/// behavior on a Vec: empty list is a real value, not a "fall back to
+/// default" signal.
+#[test]
+fn exclude_repos_explicit_empty_overrides_bundled() {
+    let src = "[filters]\nexclude_repos = []\n";
+    let cfg = parse_config(src).expect("parse");
     assert!(cfg.filters.exclude_repos.is_empty());
 }
 

@@ -11,6 +11,39 @@ use serde::Deserialize;
 
 use crate::score::Weights;
 
+/// Bundled venue-block defaults for `exclude_repos`. Each entry is a repo
+/// or org that has explicitly refused autonomous-agent or AI-assisted
+/// contributions, either through CONTRIBUTING / AI_POLICY text or through
+/// a maintainer-level signal on a closed PR. Users get this list out of
+/// the box; setting `exclude_repos` in user config replaces the default
+/// wholesale (serde `default` semantics), so a user who disagrees can
+/// override it with an empty list or a custom set.
+pub const BUNDLED_EXCLUDE_REPOS: &[&str] = &[
+    // astral-sh/.github AI_POLICY.md: "We do not allow autonomous agents
+    // to be used for contributing to our projects."
+    "astral-sh/*",
+    // atuinsh/atuin maintainer (ellie) closed two PRs simultaneously
+    // 2026-05-05 citing GitHub load from AI-generated PRs.
+    "atuinsh/atuin",
+    // clap-rs/clap maintainer (epage) asked truffle-dev not to
+    // participate again on 2026-05-12; org-wide compliance.
+    "clap-rs/*",
+    // helix-editor/helix community + MEMBER (the-mikedavis) leaning
+    // toward Ghostty no-LLM policy across discussions #15408 and #15605.
+    "helix-editor/helix",
+    // starship/starship maintainer (davidkna) closed PR #7471 on
+    // 2026-05-12 with "Not interested in contributions from bots."
+    "starship/*",
+    // stjude-rust-labs/sprocket CONTRIBUTING.md AI-policy: "no PRs
+    // including AI-generated content ... will be accepted from external
+    // contributors." Applies across the wdl crates workspace.
+    "stjude-rust-labs/*",
+    // typst/typst CONTRIBUTING.md: "Do not vibecode the change!
+    // Contributions that were implemented by an AI model will not be
+    // accepted."
+    "typst/typst",
+];
+
 /// Parsed user config. Each section has a `Default` impl, so a missing
 /// `[auth]` or `[output]` block parses as the reference shape.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -88,7 +121,12 @@ impl From<WeightsConfig> for Weights {
 /// drops watchlist entries before any fetch happens, so a venue-blocked
 /// repo (CLA-gated, no-AI policy, maintainer signal) never costs
 /// HTTP budget. Each entry is `owner/repo` for an exact match or
-/// `owner/*` for the entire org. `drop_if_open_pr` drops issues that
+/// `owner/*` for the entire org. Defaults to `BUNDLED_EXCLUDE_REPOS`,
+/// the set of venues that have publicly refused autonomous-agent or
+/// AI-assisted contributions; setting the field in user config
+/// replaces the list wholesale (serde `default` semantics), so to
+/// add to it copy the bundled entries and append.
+/// `drop_if_open_pr` drops issues that
 /// already have an open cross-referenced pull request; default `true`
 /// because a candidate with someone else's PR in flight rarely earns
 /// a parallel PR. Set to `false` to keep them in the output (the
@@ -127,7 +165,10 @@ impl Default for Filters {
                 "invalid".to_string(),
                 "duplicate".to_string(),
             ],
-            exclude_repos: Vec::new(),
+            exclude_repos: BUNDLED_EXCLUDE_REPOS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             drop_if_open_pr: true,
             drop_if_copilot_assigned: true,
             drop_if_pending_discussion: true,

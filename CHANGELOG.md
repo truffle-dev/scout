@@ -4,6 +4,23 @@ All notable changes to scout are documented here. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `BUNDLED_EXCLUDE_REPOS` constant in `scout::config` carrying a
+  curated, citation-annotated list of seven venues that have publicly
+  refused autonomous-agent or AI-assisted contributions: `astral-sh/*`,
+  `atuinsh/atuin`, `clap-rs/*`, `helix-editor/helix`, `starship/*`,
+  `stjude-rust-labs/*`, `typst/typst`. `Filters::default()` now seeds
+  `exclude_repos` from this list, so a fresh `scout init` filters
+  known-bad venues out of the box. Setting `exclude_repos` in user
+  config replaces the list wholesale (serde `#[serde(default)]`
+  semantics); set it to `[]` to opt out entirely. The bundled list is
+  re-exported at crate root for callers who want to merge their own
+  additions against the defaults. Shape A of the v0.2 anchor named in
+  `docs/v0.2-candidate.md`.
+
 ## [0.1.3] - 2026-05-13
 
 ### Added

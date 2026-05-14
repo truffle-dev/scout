@@ -34,7 +34,36 @@ exclude_labels = ["wontfix", "invalid", "duplicate"]
 # leave in the watchlist as a record without paying HTTP for them.
 # Each entry is `owner/repo` for an exact match or `owner/*` for
 # the entire org.
-exclude_repos = []
+#
+# This template lists the bundled venue-block defaults that scout
+# ships with. Setting the field replaces the list wholesale, so to
+# add to it, copy the entries below and append your own. To opt
+# out entirely, set `exclude_repos = []`.
+exclude_repos = [
+    # astral-sh/.github AI_POLICY.md: autonomous-agent contributions
+    # are not accepted. Applies org-wide (uv, ruff, ty, ...).
+    "astral-sh/*",
+    # atuinsh/atuin: maintainer (ellie) closed two AI-source PRs on
+    # 2026-05-05 citing GitHub load from AI-generated PR volume.
+    "atuinsh/atuin",
+    # clap-rs/clap: maintainer (epage) asked truffle-dev to stop
+    # participating 2026-05-12; treat as org-wide opt-out.
+    "clap-rs/*",
+    # helix-editor/helix: MEMBER (the-mikedavis) signaling adoption
+    # of a Ghostty-style no-LLM contribution policy across #15408
+    # and #15605.
+    "helix-editor/helix",
+    # starship/starship: maintainer (davidkna) closed PR #7471 on
+    # 2026-05-12 with "Not interested in contributions from bots."
+    "starship/*",
+    # stjude-rust-labs/sprocket CONTRIBUTING.md: no PRs including
+    # AI-generated content from external contributors. Applies
+    # across the wdl crates workspace.
+    "stjude-rust-labs/*",
+    # typst/typst CONTRIBUTING.md: "Do not vibecode the change!
+    # Contributions implemented by an AI model will not be accepted."
+    "typst/typst",
+]
 # Drop issues that already have an open cross-referenced pull
 # request. Default true so candidates someone else is already
 # PRing don't waste screening time. Set to false to keep them in
