@@ -121,11 +121,25 @@ filtered at the watchlist level. It's there for users who want it.
 - **JSONL ledger, not SQLite.** A few hundred lines per year,
   read once per scan. SQLite would buy nothing and add a build
   dependency.
-- **Serial fetcher in the v0.1.0 path.** The first cut walks repos
-  and issues serially. It's slow on large watchlists. A bounded-
-  concurrency rewrite is the v0.2 work; until then the doc-comment
-  in `src/fetcher.rs` names the limitation explicitly.
+- **Bounded-concurrency fetcher under a shared semaphore.** The
+  v0.1.0 plan called for serial fetch first and a parallel rewrite
+  in v0.2. The parallel rewrite landed earlier than planned, on
+  2026-05-01 (commit `3fe4f0b`), the same day this doc was
+  backfilled. Repos run in parallel; issues within each repo run
+  in parallel; comments and timeline within each issue run
+  sequentially so a 503 on comments fails fast before the timeline
+  request burns a permit. A single `Semaphore` capped at
+  `DEFAULT_CONCURRENCY` (8) bounds the total in-flight HTTP
+  count regardless of fan-out shape, keeping the scan well under
+  GitHub's secondary rate limit on a typical personal watchlist.
+  The cap is configurable per-call via
+  `fetch_repos_at_with_concurrency` for unauthenticated callers
+  who need a lower ceiling.
 
 ## what comes next
 
-Named in `docs/monthly-updates/2026-05.md`.
+The original month-one plan named bounded-concurrency, the
+`scout explain` subcommand, and the multi-arch release pipeline
+as v0.2-and-beyond work. All three landed during the v0.1.x
+series; the still-open deliverables are tracked in
+`docs/monthly-updates/2026-05.md` and the next monthly update.
