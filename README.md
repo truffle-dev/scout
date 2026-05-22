@@ -114,19 +114,19 @@ Global flags: `--config PATH`, `--watchlist PATH`, `--ledger PATH`.
 | score | issue | title |
 | ----: | :---- | :---- |
 | 0.85 | [mlc-ai/mlc-llm#3487](https://github.com/mlc-ai/mlc-llm/issues/3487) | Tensor parallelism on Vulkan fails with SequentiallyConsistent SPIR-V barrier on Windows |
-| 0.70 | [clap-rs/clap#6372](https://github.com/clap-rs/clap/issues/6372) | Zsh completion scripts break when ksharrays is enabled |
-| 0.60 | [starship/starship#7450](https://github.com/starship/starship/issues/7450) | Exit status does not clear on empty command for the `status` and `character` modules |
+| 0.70 | [denoland/std#7053](https://github.com/denoland/std/issues/7053) | Runtime and TS types of getCookies are wrong (still) |
+| 0.60 | [nodejs/node#63487](https://github.com/nodejs/node/issues/63487) | Node 24.16.0: extract-zip hangs extracting |
 
 Scores depend on each issue's current state and your config weights, so
 rerunning `scout scan` reflects updates and any tuning in `config.toml`.
 
-`scout explain clap-rs/clap#6353` shows the per-heuristic breakdown
+`scout explain rust-lang/rust#156837` shows the per-heuristic breakdown
 behind a single score:
 
 ```
-# `ValueCompleter::complete_at` for indexed multi-value completion
+# [ICE]: Field projection applied to a type other than Adt or Tuple
 
-https://github.com/clap-rs/clap/issues/6353
+https://github.com/rust-lang/rust/issues/156837
 
 **Score**: 0.85
 
